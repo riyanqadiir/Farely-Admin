@@ -1,5 +1,5 @@
-import { ReactNode, useState } from 'react';
-import { NavLink, Link, useLocation, Outlet } from 'react-router-dom';
+import { ReactNode, useMemo, useState } from 'react';
+import { NavLink, Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Map, 
@@ -16,8 +16,10 @@ import {
   Users,
   UserCog
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../hooks/useAuth';
-import { cn } from '../../lib/utils';
+import { api } from '../../api/mocks';
+import { cn, formatDate } from '../../lib/utils';
 import { Button } from '../ui/Button';
 
 const navigation = [
@@ -31,8 +33,66 @@ const navigation = [
 
 export function Shell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const { data: supportData } = useQuery({
+    queryKey: ['shell-notifications-support'],
+    queryFn: () => api.support.getThreads({ limit: 8 }),
+    refetchInterval: 30000,
+  });
+  const { data: feedbackData } = useQuery({
+    queryKey: ['shell-notifications-feedback'],
+    queryFn: () => api.feedback.list({ limit: 8 }),
+    refetchInterval: 45000,
+  });
+  const { data: activeUsersData } = useQuery({
+    queryKey: ['shell-notifications-active-users'],
+    queryFn: () => api.metrics.getActiveUsers({ hours: 24 }),
+    refetchInterval: 60000,
+  });
+
+  const notifications = useMemo(() => {
+    const items: Array<{ id: string; title: string; body: string; route: string; ts?: string }> = [];
+    const threads = supportData?.success ? supportData.data.items : [];
+    const openThreads = threads.filter((t) => t.status === 'open').slice(0, 3);
+    openThreads.forEach((t) =>
+      items.push({
+        id: `thread:${t.id}`,
+        title: 'Open support thread',
+        body: `${t.customer.name || t.customer.email || 'User'} · ${t.subject}`,
+        route: '/support/inbox',
+        ts: t.lastMessageAt,
+      })
+    );
+
+    const feedbacks = feedbackData?.success ? feedbackData.data.items : [];
+    const recentFeedback = feedbacks
+      .filter((f) => Date.now() - new Date(f.createdAt).getTime() < 24 * 60 * 60 * 1000)
+      .slice(0, 2);
+    recentFeedback.forEach((f) =>
+      items.push({
+        id: `feedback:${f.id}`,
+        title: `New ${f.stars}★ feedback`,
+        body: (f.appExperience || f.timeSavingNote || 'User left feedback').slice(0, 90),
+        route: '/feedback',
+        ts: f.createdAt,
+      })
+    );
+
+    const active = activeUsersData?.success ? activeUsersData.data.displayCount : 0;
+    items.push({
+      id: 'active-users',
+      title: 'Active users (24h)',
+      body: `${active} users active in the last 24 hours`,
+      route: '/dashboard',
+    });
+    return items.slice(0, 8);
+  }, [supportData, feedbackData, activeUsersData]);
+
+  const unreadCount = notifications.filter((n) => n.id !== 'active-users').length;
   const secondaryNavigation = [
     ...(user?.role === 'super_admin' ? [{ name: 'Admin Users', href: '/settings/admin-users', icon: UserCog }] : []),
     { name: 'Settings', href: '/settings/profile', icon: Settings },
@@ -187,10 +247,55 @@ export function Shell() {
             </div>
             
             <div className="flex items-center gap-x-4 lg:gap-x-6">
-              <button className="-m-2.5 p-2.5 text-emerald-400 hover:text-emerald-600 transition-colors relative">
+              <div className="relative">
+              <button
+                type="button"
+                onClick={() => setNotificationsOpen((p) => !p)}
+                className="-m-2.5 p-2.5 text-emerald-400 hover:text-emerald-600 transition-colors relative"
+              >
                 <Bell className="h-6 w-6" />
-                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white shadow-sm" />
+                {unreadCount > 0 ? (
+                  <span className="absolute top-2 right-1 min-w-4 h-4 px-1 text-[10px] leading-4 text-white text-center bg-red-500 rounded-full border border-white shadow-sm">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                ) : null}
               </button>
+              {notificationsOpen ? (
+                <div className="absolute right-0 mt-2 w-[340px] rounded-xl border border-slate-200 bg-white shadow-xl z-50">
+                  <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-slate-900">Notifications</p>
+                    <button
+                      type="button"
+                      onClick={() => setNotificationsOpen(false)}
+                      className="text-xs text-slate-500 hover:text-slate-700"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="max-h-80 overflow-auto">
+                    {notifications.length === 0 ? (
+                      <p className="px-3 py-4 text-sm text-slate-500">No notifications right now.</p>
+                    ) : (
+                      notifications.map((n) => (
+                        <button
+                          type="button"
+                          key={n.id}
+                          onClick={() => {
+                            setNotificationsOpen(false);
+                            navigate(n.route);
+                          }}
+                          className="w-full text-left px-3 py-3 border-b border-slate-100 hover:bg-emerald-50/40 transition-colors"
+                        >
+                          <p className="text-sm font-semibold text-slate-900">{n.title}</p>
+                          <p className="text-xs text-slate-600 mt-1">{n.body}</p>
+                          {n.ts ? <p className="text-[10px] text-slate-400 mt-1">{formatDate(n.ts)}</p> : null}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
+              </div>
             </div>
           </div>
         </div>
