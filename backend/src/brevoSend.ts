@@ -19,6 +19,17 @@ export type SendSupportReplyResult = {
   messageId: string;
 };
 
+export type SendAdminCredentialEmailInput = {
+  toEmail: string;
+  toName?: string | null;
+  subject: string;
+  textBody: string;
+};
+
+export type SendAdminCredentialEmailResult = {
+  messageId: string;
+};
+
 function buildReplyToAddress(threadMongoId: string): string | null {
   const domain = process.env.BREVO_INBOUND_DOMAIN?.trim();
   if (!domain) return null;
@@ -86,5 +97,45 @@ export async function sendSupportReplyEmail(input: SendSupportReplyInput): Promi
     console.warn('[brevo] response missing messageId', json);
     return null;
   }
+  return { messageId };
+}
+
+export async function sendAdminCredentialEmail(
+  input: SendAdminCredentialEmailInput
+): Promise<SendAdminCredentialEmailResult | null> {
+  const apiKey = process.env.BREVO_API_KEY?.trim();
+  const senderEmail = process.env.BREVO_SENDER_EMAIL?.trim();
+  if (!apiKey || !senderEmail) {
+    // eslint-disable-next-line no-console
+    console.warn('[brevo] BREVO_API_KEY or BREVO_SENDER_EMAIL missing — admin credential email not sent.');
+    return null;
+  }
+
+  const senderName = process.env.BREVO_SENDER_NAME?.trim() || 'Farely';
+  const body: Record<string, unknown> = {
+    sender: { name: senderName, email: senderEmail },
+    to: [{ email: input.toEmail, name: input.toName || undefined }],
+    subject: input.subject,
+    textContent: input.textBody,
+    tags: ['farely_admin_credentials'],
+  };
+
+  const res = await fetch(BREVO_API, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as { messageId?: string; message?: string };
+  if (!res.ok) {
+    // eslint-disable-next-line no-console
+    console.error('[brevo] admin credential send failed', res.status, json);
+    return null;
+  }
+  const messageId = json.messageId ? String(json.messageId) : '';
+  if (!messageId) return null;
   return { messageId };
 }

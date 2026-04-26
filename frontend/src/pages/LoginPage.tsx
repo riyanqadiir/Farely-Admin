@@ -4,8 +4,8 @@ import { useAuth } from '../hooks/useAuth';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/Card';
-import { ShieldCheck } from 'lucide-react';
 import { motion } from 'motion/react';
+import { BrandLogo } from '../components/branding/BrandLogo';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -34,10 +34,9 @@ export default function LoginPage() {
         className="w-full max-w-md"
       >
         <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-emerald-200 mb-4 transform -rotate-6">
-            <ShieldCheck size={36} />
+          <div className="mb-4">
+            <BrandLogo iconClassName="h-16 w-16 rounded-2xl shadow-xl shadow-emerald-200" textClassName="text-3xl" showAdminTag />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Farely Admin</h1>
           <p className="text-slate-500 mt-2">Secure access to operations dashboard</p>
         </div>
 

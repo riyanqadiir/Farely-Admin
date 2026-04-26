@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 import { Router } from 'express';
-import { comparePassword, expiresInSec, hashToken, issueRefreshToken, requireAuth, requireRole, signAccessToken } from './auth';
+import { comparePassword, expiresInSec, hashPassword, hashToken, issueRefreshToken, requireAuth, requireRole, signAccessToken } from './auth';
 import {
   AdminSessionModel,
   AdminUserModel,
+  AppUserModel,
   AppSourceFeedbackModel,
   AuditLogModel,
   FeedbackEntryModel,
@@ -15,7 +16,7 @@ import {
   UserPresenceModel,
 } from './models';
 import { ApiError, ApiSuccess, RideStatus, ThreadPriority, ThreadStatus } from './types';
-import { sendSupportReplyEmail } from './brevoSend';
+import { sendAdminCredentialEmail, sendSupportReplyEmail } from './brevoSend';
 
 const router = Router();
 
@@ -26,6 +27,26 @@ const parseLimit = (limitParam: unknown): number => {
   const parsed = Number(limitParam);
   if (!Number.isFinite(parsed)) return 25;
   return Math.max(1, Math.min(100, parsed));
+};
+
+const normalizeEmail = (value: unknown): string => String(value || '').trim().toLowerCase();
+
+const sanitizeAdmin = (adminUser: any) => ({
+  id: String(adminUser._id),
+  email: String(adminUser.email || '').toLowerCase(),
+  fullName: String(adminUser.fullName || ''),
+  role: adminUser.role,
+  active: Boolean(adminUser.active),
+  mustChangePassword: Boolean(adminUser.mustChangePassword),
+  createdAt: adminUser.createdAt || null,
+  updatedAt: adminUser.updatedAt || null,
+});
+
+const randomPassword = (len = 14): string => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
+  let out = '';
+  for (let i = 0; i < len; i += 1) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
 };
 
 async function lastInboundSmtpMessageId(threadOid: mongoose.Types.ObjectId): Promise<string | null> {
@@ -46,7 +67,7 @@ router.post('/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json(fail('VALIDATION_ERROR', 'Email and password are required'));
 
-  const adminUser = await AdminUserModel().findOne({ email: String(email).toLowerCase(), active: true }).lean();
+  const adminUser = await AdminUserModel().findOne({ email: normalizeEmail(email), active: true }).lean();
   if (!adminUser) return res.status(401).json(fail('UNAUTHORIZED', 'Invalid credentials'));
 
   const passwordOk = await comparePassword(String(password), String(adminUser.passwordHash));
@@ -70,6 +91,7 @@ router.post('/auth/login', async (req, res) => {
         email: adminUser.email,
         fullName: adminUser.fullName,
         role: adminUser.role,
+        mustChangePassword: Boolean((adminUser as any).mustChangePassword),
       },
     })
   );
@@ -98,6 +120,7 @@ router.post('/auth/refresh', async (req, res) => {
         email: adminUser.email,
         fullName: adminUser.fullName,
         role: adminUser.role,
+        mustChangePassword: Boolean((adminUser as any).mustChangePassword),
       },
     })
   );
@@ -112,6 +135,267 @@ router.post('/auth/logout', async (req, res) => {
 });
 
 router.use(requireAuth);
+
+router.get('/me', async (req: any, res) => {
+  const adminId = req.admin?.sub;
+  if (!adminId) return res.status(401).json(fail('UNAUTHORIZED', 'Missing admin identity'));
+  const admin = await AdminUserModel().findById(adminId).lean();
+  if (!admin) return res.status(404).json(fail('NOT_FOUND', 'Admin not found'));
+  return res.json(ok({ admin: sanitizeAdmin(admin) }));
+});
+
+router.patch('/me', async (req: any, res) => {
+  const adminId = req.admin?.sub;
+  if (!adminId) return res.status(401).json(fail('UNAUTHORIZED', 'Missing admin identity'));
+  const fullName = String(req.body?.fullName || '').trim();
+  if (!fullName || fullName.length < 2) return res.status(400).json(fail('VALIDATION_ERROR', 'Valid fullName is required'));
+  const admin = await AdminUserModel().findByIdAndUpdate(
+    adminId,
+    { $set: { fullName: fullName.slice(0, 120) } },
+    { new: true }
+  );
+  if (!admin) return res.status(404).json(fail('NOT_FOUND', 'Admin not found'));
+  await AuditLogModel().create({
+    action: 'admin.profile.updated',
+    actorId: adminId,
+    metadata: { fullName: admin.fullName },
+  });
+  return res.json(ok({ admin: sanitizeAdmin(admin.toObject()) }));
+});
+
+router.post('/me/change-password', async (req: any, res) => {
+  const adminId = req.admin?.sub;
+  if (!adminId) return res.status(401).json(fail('UNAUTHORIZED', 'Missing admin identity'));
+  const currentPassword = String(req.body?.currentPassword || '');
+  const newPassword = String(req.body?.newPassword || '');
+  if (!currentPassword || !newPassword) return res.status(400).json(fail('VALIDATION_ERROR', 'currentPassword and newPassword are required'));
+  if (newPassword.length < 10) return res.status(400).json(fail('VALIDATION_ERROR', 'newPassword must be at least 10 characters'));
+
+  const admin = await AdminUserModel().findById(adminId);
+  if (!admin) return res.status(404).json(fail('NOT_FOUND', 'Admin not found'));
+  const currentOk = await comparePassword(currentPassword, String(admin.passwordHash));
+  if (!currentOk) return res.status(401).json(fail('UNAUTHORIZED', 'Current password is incorrect'));
+
+  admin.passwordHash = await hashPassword(newPassword);
+  admin.mustChangePassword = false;
+  await admin.save();
+  await AdminSessionModel().deleteMany({ adminId: String(admin._id) });
+  await AuditLogModel().create({
+    action: 'admin.password.changed',
+    actorId: String(admin._id),
+    metadata: { forcedResetCleared: true },
+  });
+  return res.json(ok({ changed: true }));
+});
+
+router.get('/admin-users', requireRole(['super_admin']), async (_req: any, res) => {
+  const admins = await AdminUserModel().find({}).sort({ createdAt: -1 }).lean();
+  return res.json(ok({ items: admins.map((a) => sanitizeAdmin(a)) }));
+});
+
+router.post('/admin-users', requireRole(['super_admin']), async (req: any, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const fullName = String(req.body?.fullName || '').trim();
+  const role = String(req.body?.role || 'support');
+  const providedPassword = String(req.body?.password || '');
+  const validRole = ['super_admin', 'support', 'ops_analyst'].includes(role);
+  if (!email || !fullName || !validRole) return res.status(400).json(fail('VALIDATION_ERROR', 'email, fullName, and valid role are required'));
+
+  const existing = await AdminUserModel().findOne({ email }).lean();
+  if (existing) return res.status(409).json(fail('CONFLICT', 'Admin email already exists'));
+
+  const tempPassword = providedPassword || randomPassword();
+  if (tempPassword.length < 10) return res.status(400).json(fail('VALIDATION_ERROR', 'password must be at least 10 characters'));
+
+  const created = await AdminUserModel().create({
+    email,
+    fullName: fullName.slice(0, 120),
+    role,
+    active: true,
+    mustChangePassword: true,
+    passwordHash: await hashPassword(tempPassword),
+  });
+
+  await AuditLogModel().create({
+    action: 'admin.user.created',
+    actorId: req.admin?.sub || 'unknown',
+    metadata: { adminId: String(created._id), email, role },
+  });
+
+  let emailSent = false;
+  try {
+    const base = process.env.ADMIN_CONSOLE_URL?.trim() || '';
+    const loginUrl = base ? `${base.replace(/\/+$/g, '')}/login` : '';
+    const subj = 'Your Farely Admin account';
+    const body = `You have been added as a staff member in Farely Admin.\n\nLogin: ${email}\nTemporary password: ${tempPassword}\n${loginUrl ? `\nLogin URL: ${loginUrl}\n` : '\n'}\nSecurity: change your password immediately after first login.`;
+    const sent = await sendAdminCredentialEmail({ toEmail: email, toName: fullName, subject: subj, textBody: body });
+    emailSent = !!sent?.messageId;
+  } catch {
+    emailSent = false;
+  }
+
+  return res.status(201).json(
+    ok({
+      admin: sanitizeAdmin(created.toObject()),
+      tempPassword,
+      emailSent,
+      message: 'Share temp password securely. User must change password at first login.',
+    })
+  );
+});
+
+router.patch('/admin-users/:id', requireRole(['super_admin']), async (req: any, res) => {
+  const targetId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetId)) return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid admin id'));
+  const actorId = String(req.admin?.sub || '');
+  const fullName = req.body?.fullName !== undefined ? String(req.body.fullName || '').trim().slice(0, 120) : undefined;
+  const role = req.body?.role !== undefined ? String(req.body.role || '') : undefined;
+  const active = req.body?.active !== undefined ? Boolean(req.body.active) : undefined;
+  if (role && !['super_admin', 'support', 'ops_analyst'].includes(role)) {
+    return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid role'));
+  }
+
+  const admin = await AdminUserModel().findById(targetId);
+  if (!admin) return res.status(404).json(fail('NOT_FOUND', 'Admin not found'));
+
+  if (actorId === targetId && role && role !== 'super_admin') {
+    return res.status(400).json(fail('VALIDATION_ERROR', 'You cannot demote your own super_admin role'));
+  }
+  if (actorId === targetId && active === false) {
+    return res.status(400).json(fail('VALIDATION_ERROR', 'You cannot deactivate your own account'));
+  }
+  if ((role && role !== 'super_admin') || active === false) {
+    const countSuperActive = await AdminUserModel().countDocuments({ role: 'super_admin', active: true });
+    if (admin.role === 'super_admin' && admin.active && countSuperActive <= 1) {
+      return res.status(400).json(fail('VALIDATION_ERROR', 'At least one active super_admin is required'));
+    }
+  }
+
+  if (fullName !== undefined) admin.fullName = fullName;
+  if (role !== undefined) admin.role = role as any;
+  if (active !== undefined) admin.active = active;
+  await admin.save();
+
+  if (active === false) {
+    await AdminSessionModel().deleteMany({ adminId: String(admin._id) });
+  }
+  await AuditLogModel().create({
+    action: 'admin.user.updated',
+    actorId: actorId || 'unknown',
+    metadata: { adminId: String(admin._id), role: admin.role, active: admin.active },
+  });
+
+  return res.json(ok({ admin: sanitizeAdmin(admin.toObject()) }));
+});
+
+router.post('/admin-users/:id/reset-password', requireRole(['super_admin']), async (req: any, res) => {
+  const targetId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetId)) return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid admin id'));
+  const nextPassword = String(req.body?.password || '') || randomPassword();
+  if (nextPassword.length < 10) return res.status(400).json(fail('VALIDATION_ERROR', 'password must be at least 10 characters'));
+
+  const admin = await AdminUserModel().findById(targetId);
+  if (!admin) return res.status(404).json(fail('NOT_FOUND', 'Admin not found'));
+  admin.passwordHash = await hashPassword(nextPassword);
+  admin.mustChangePassword = true;
+  await admin.save();
+  await AdminSessionModel().deleteMany({ adminId: String(admin._id) });
+  await AuditLogModel().create({
+    action: 'admin.user.password_reset',
+    actorId: req.admin?.sub || 'unknown',
+    metadata: { adminId: String(admin._id) },
+  });
+
+  let emailSent = false;
+  try {
+    const base = process.env.ADMIN_CONSOLE_URL?.trim() || '';
+    const loginUrl = base ? `${base.replace(/\/+$/g, '')}/login` : '';
+    const subj = 'Farely Admin password reset';
+    const body = `Your Farely Admin password was reset by an administrator.\n\nLogin: ${String(admin.email || '')}\nTemporary password: ${nextPassword}\n${loginUrl ? `\nLogin URL: ${loginUrl}\n` : '\n'}\nSecurity: change your password immediately after login.`;
+    const sent = await sendAdminCredentialEmail({
+      toEmail: String(admin.email || ''),
+      toName: String(admin.fullName || ''),
+      subject: subj,
+      textBody: body,
+    });
+    emailSent = !!sent?.messageId;
+  } catch {
+    emailSent = false;
+  }
+  return res.json(
+    ok({
+      admin: sanitizeAdmin(admin.toObject()),
+      tempPassword: nextPassword,
+      emailSent,
+      message: 'Share reset password securely. User must change password at next login.',
+    })
+  );
+});
+
+router.get('/users/mobile', async (req: any, res) => {
+  const limit = parseLimit(req.query.limit);
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const activeWithinHours = Math.max(1, Math.min(720, Number(req.query.activeWithinHours) || 168));
+  const activeSince = new Date(Date.now() - activeWithinHours * 60 * 60 * 1000);
+
+  const filter: Record<string, unknown> = {};
+  if (q) {
+    filter.$or = [
+      { fullName: { $regex: q, $options: 'i' } },
+      { email: { $regex: q, $options: 'i' } },
+      { phone: { $regex: q, $options: 'i' } },
+    ];
+  }
+
+  const users = await AppUserModel().find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  const userIds = users.map((u) => String(u._id));
+  const [presenceRows, rideRows, supportCounts] = await Promise.all([
+    UserPresenceModel().find({ userId: { $in: userIds } }).lean(),
+    RideSnapshotModel()
+      .find({ userId: { $in: userIds } })
+      .sort({ createdAt: -1 })
+      .lean(),
+    SupportThreadModel()
+      .aggregate([
+        { $match: { 'customer.userId': { $in: userIds }, status: { $in: ['open', 'in_progress'] } } },
+        { $group: { _id: '$customer.userId', count: { $sum: 1 } } },
+      ])
+      .exec(),
+  ]);
+  const presenceMap = new Map(presenceRows.map((r) => [String(r.userId), r.lastSeenAt]));
+  const latestRideMap = new Map<string, { status: string; at: Date | null }>();
+  for (const r of rideRows) {
+    const uid = String(r.userId);
+    if (!latestRideMap.has(uid)) latestRideMap.set(uid, { status: String(r.status), at: (r as any).createdAt || null });
+  }
+  const openSupportMap = new Map<string, number>(supportCounts.map((r: any) => [String(r._id), Number(r.count || 0)]));
+
+  const items = users.map((u) => {
+    const uid = String(u._id);
+    const lastSeenAt = presenceMap.get(uid) || (u.lastActiveAt ? new Date(u.lastActiveAt) : null);
+    const ride = latestRideMap.get(uid) || { status: 'none', at: null };
+    const openSupportThreads = openSupportMap.get(uid) || 0;
+    const status = lastSeenAt && lastSeenAt >= activeSince ? 'active' : 'inactive';
+    return {
+      id: uid,
+      fullName: String(u.fullName || ''),
+      email: String(u.email || ''),
+      phone: String(u.phone || ''),
+      role: String(u.role || 'user'),
+      city: String(u.city || ''),
+      district: String(u.district || ''),
+      emailVerified: Boolean(u.emailVerified),
+      phoneVerified: Boolean(u.phoneVerified),
+      lastSeenAt: lastSeenAt ? new Date(lastSeenAt).toISOString() : null,
+      status,
+      lastRideStatus: ride.status,
+      lastRideAt: ride.at ? new Date(ride.at).toISOString() : null,
+      openSupportThreads,
+      createdAt: (u.createdAt ? new Date(u.createdAt) : new Date()).toISOString(),
+    };
+  });
+  return res.json(ok({ items }));
+});
 
 router.get('/metrics/traffic', async (req, res) => {
   const from = req.query.from ? new Date(String(req.query.from)) : null;

@@ -6,6 +6,7 @@ interface AuthContextType {
   user: AdminUser | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  updateLocalUser: (user: AdminUser) => void;
   isLoading: boolean;
 }
 
@@ -51,8 +52,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('farely_admin_refresh_token');
   };
 
+  const updateLocalUser = (userData: AdminUser) => {
+    setUser(userData);
+    localStorage.setItem('farely_admin_user', JSON.stringify(userData));
+  };
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, login, logout, updateLocalUser, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

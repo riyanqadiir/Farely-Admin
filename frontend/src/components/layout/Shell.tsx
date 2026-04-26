@@ -12,7 +12,9 @@ import {
   Search,
   Bell,
   ArrowRightLeft,
-  Star
+  Star,
+  Users,
+  UserCog
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { cn } from '../../lib/utils';
@@ -22,18 +24,19 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Ride Logs', href: '/rides/logs', icon: FileText },
   { name: 'Hotspots', href: '/rides/hotspots', icon: Map },
+  { name: 'Mobile Users', href: '/users/mobile', icon: Users },
   { name: 'Support Inbox', href: '/support/inbox', icon: Inbox },
   { name: 'Feedback', href: '/feedback', icon: Star },
-];
-
-const secondaryNavigation = [
-  { name: 'Settings', href: '/settings/profile', icon: Settings },
 ];
 
 export function Shell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
+  const secondaryNavigation = [
+    ...(user?.role === 'super_admin' ? [{ name: 'Admin Users', href: '/settings/admin-users', icon: UserCog }] : []),
+    { name: 'Settings', href: '/settings/profile', icon: Settings },
+  ];
 
   return (
     <div className="min-h-screen bg-[#f0fdf4] selection:bg-emerald-200 overflow-hidden isolate">

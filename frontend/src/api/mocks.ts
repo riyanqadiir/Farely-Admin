@@ -1,11 +1,17 @@
 import {
   ApiSuccess,
+  AdminUserActionResponse,
+  AdminUsersResponse,
   AuthPayload,
+  ChangePasswordRequest,
+  CreateAdminUserRequest,
   HotspotTile,
   HotspotsQuery,
   HotspotsResponse,
   LoginRequest,
   LogoutResponse,
+  MeResponse,
+  MobileUsersResponse,
   PatchThreadRequest,
   PatchThreadResponse,
   RefreshRequest,
@@ -24,6 +30,8 @@ import {
   ActiveUsersResponse,
   ActiveUsersQuery,
   FeedbackListResponse,
+  UpdateAdminUserRequest,
+  UpdateMeRequest,
 } from '../types/dtos';
 
 const API_BASE_URL = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:4001';
@@ -78,6 +86,21 @@ export const api = {
       request<AuthPayload>('/admin/auth/refresh', { method: 'POST', body: JSON.stringify(payload) }),
     logout: async (payload: RefreshRequest) =>
       request<LogoutResponse>('/admin/auth/logout', { method: 'POST', body: JSON.stringify(payload) }),
+    me: async () => request<MeResponse>('/admin/me'),
+    updateMe: async (payload: UpdateMeRequest) =>
+      request<MeResponse>('/admin/me', { method: 'PATCH', body: JSON.stringify(payload) }),
+    changePassword: async (payload: ChangePasswordRequest) =>
+      request<{ changed: boolean }>('/admin/me/change-password', { method: 'POST', body: JSON.stringify(payload) }),
+    listAdmins: async () => request<AdminUsersResponse>('/admin/admin-users'),
+    createAdmin: async (payload: CreateAdminUserRequest) =>
+      request<AdminUserActionResponse>('/admin/admin-users', { method: 'POST', body: JSON.stringify(payload) }),
+    updateAdmin: async (id: string, payload: UpdateAdminUserRequest) =>
+      request<AdminUserActionResponse>(`/admin/admin-users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+    resetAdminPassword: async (id: string, payload?: { password?: string }) =>
+      request<AdminUserActionResponse>(`/admin/admin-users/${id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify(payload || {}),
+      }),
   },
   metrics: {
     getTraffic: async (query?: TrafficMetricsQuery) => {
@@ -111,6 +134,16 @@ export const api = {
     getLogs: async (query?: RideLogsQuery) => {
       const qs = new URLSearchParams(Object.entries(query || {}).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
       return request<RideLogsResponse>(`/admin/rides/logs${qs.toString() ? `?${qs}` : ''}`);
+    },
+  },
+  users: {
+    listMobile: async (params?: { limit?: number; q?: string; activeWithinHours?: number }) => {
+      const qs = new URLSearchParams(
+        Object.entries(params || {})
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      );
+      return request<MobileUsersResponse>(`/admin/users/mobile${qs.toString() ? `?${qs}` : ''}`);
     },
   },
   support: {

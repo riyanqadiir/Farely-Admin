@@ -17,6 +17,8 @@ import SupportInboxPage from './pages/SupportInboxPage';
 import HotspotsPage from './pages/HotspotsPage';
 import FeedbackListPage from './pages/FeedbackListPage';
 import SettingsPage from './pages/SettingsPage';
+import AdminUsersPage from './pages/AdminUsersPage';
+import MobileUsersPage from './pages/MobileUsersPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,7 +48,9 @@ export default function App() {
                 <Route path="/rides/hotspots" element={<HotspotsPage />} />
                 <Route path="/support/inbox" element={<SupportInboxPage />} />
                 <Route path="/feedback" element={<FeedbackListPage />} />
+                <Route path="/users/mobile" element={<MobileUsersPage />} />
                 <Route path="/settings/profile" element={<SettingsPage />} />
+                <Route path="/settings/admin-users" element={<AdminUsersPage />} />
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
               </Route>
             </Route>

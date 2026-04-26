@@ -24,6 +24,10 @@ export interface AdminUser {
   email: string;
   fullName: string;
   role: AdminRole;
+  active?: boolean;
+  mustChangePassword?: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
   avatar?: string;
 }
 
@@ -46,6 +50,65 @@ export interface RefreshRequest {
 
 export interface LogoutResponse {
   loggedOut: boolean;
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
+export interface UpdateMeRequest {
+  fullName: string;
+}
+
+export interface MeResponse {
+  admin: AdminUser;
+}
+
+export interface AdminUsersResponse {
+  items: AdminUser[];
+}
+
+export interface CreateAdminUserRequest {
+  email: string;
+  fullName: string;
+  role: AdminRole;
+  password?: string;
+}
+
+export interface AdminUserActionResponse {
+  admin: AdminUser;
+  tempPassword?: string;
+  emailSent?: boolean;
+  message?: string;
+}
+
+export interface UpdateAdminUserRequest {
+  fullName?: string;
+  role?: AdminRole;
+  active?: boolean;
+}
+
+export interface MobileUserItem {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  role: string;
+  city: string;
+  district: string;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  lastSeenAt: string | null;
+  status: 'active' | 'inactive';
+  lastRideStatus: string;
+  lastRideAt: string | null;
+  openSupportThreads: number;
+  createdAt: string;
+}
+
+export interface MobileUsersResponse {
+  items: MobileUserItem[];
 }
 
 export interface TrafficSummary {

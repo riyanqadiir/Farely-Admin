@@ -10,6 +10,7 @@ interface AdminUserDoc {
   role: AdminUserRole;
   passwordHash: string;
   active: boolean;
+  mustChangePassword: boolean;
 }
 
 interface AdminSessionDoc {
@@ -149,6 +150,22 @@ interface AppSourceFeedbackRow {
   createdAt: Date;
 }
 
+/** Farely app `users` collection (APP_DB) — read-only user operations view. */
+interface AppUserRow {
+  _id: mongoose.Types.ObjectId;
+  fullName?: string;
+  email?: string;
+  phone?: string;
+  countryCode?: string;
+  role?: string;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  lastActiveAt?: Date | null;
+  city?: string;
+  district?: string;
+  createdAt?: Date;
+}
+
 const model = <T>(name: string, schema: Schema, useApp = false): Model<T> =>
   ((useApp ? appConn() : adminConn()).models[name] as Model<T>) || (useApp ? appConn() : adminConn()).model<T>(name, schema);
 
@@ -162,6 +179,7 @@ export const AdminUserModel = (): Model<AdminUserDoc> =>
         role: { type: String, enum: ['super_admin', 'support', 'ops_analyst'], default: 'support' },
         passwordHash: { type: String, required: true },
         active: { type: Boolean, default: true },
+        mustChangePassword: { type: Boolean, default: false, index: true },
       },
       { timestamps: true }
     )
@@ -357,6 +375,27 @@ export const AppSourceFeedbackModel = (): Model<AppSourceFeedbackRow> =>
         provider: { type: String, default: null },
       },
       { collection: 'feedbacks', strict: false, timestamps: true }
+    ),
+    true
+  );
+
+export const AppUserModel = (): Model<AppUserRow> =>
+  model<AppUserRow>(
+    'AppUser',
+    new Schema<AppUserRow>(
+      {
+        fullName: { type: String, default: '' },
+        email: { type: String, default: '' },
+        phone: { type: String, default: '' },
+        countryCode: { type: String, default: '' },
+        role: { type: String, default: 'user' },
+        emailVerified: { type: Boolean, default: false },
+        phoneVerified: { type: Boolean, default: false },
+        lastActiveAt: { type: Date, default: null },
+        city: { type: String, default: '' },
+        district: { type: String, default: '' },
+      },
+      { collection: 'users', strict: false, timestamps: true }
     ),
     true
   );
