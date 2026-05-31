@@ -1,30 +1,30 @@
-import { ReactNode, useMemo, useState } from 'react';
-import { NavLink, Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Map, 
-  FileText, 
-  Inbox, 
-  Settings, 
-  LogOut, 
-  Menu, 
-  X,
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, Outlet, useNavigate } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  Map,
+  FileText,
+  Inbox,
+  Settings,
+  Menu,
   Search,
   Bell,
-  ArrowRightLeft,
   Star,
   Users,
-  UserCog
+  UserCog,
+  Navigation,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../hooks/useAuth';
 import { api } from '../../api/mocks';
 import { cn, formatDate } from '../../lib/utils';
-import { Button } from '../ui/Button';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { AppSidebar } from './AppSidebar';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Ride Logs', href: '/rides/logs', icon: FileText },
+  { name: 'Trip routes', href: '/rides/journeys', icon: Navigation },
+  { name: 'Ride logs', href: '/rides/logs', icon: FileText },
   { name: 'Hotspots', href: '/rides/hotspots', icon: Map },
   { name: 'Mobile Users', href: '/users/mobile', icon: Users },
   { name: 'Support Inbox', href: '/support/inbox', icon: Inbox },
@@ -32,7 +32,16 @@ const navigation = [
 ];
 
 export function Shell() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isDesktop = useMediaQuery('(min-width: 1024px)');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (isDesktop) setMobileOpen(false);
+  }, [isDesktop]);
+
+  const sidebarExpanded = isDesktop ? !desktopCollapsed : mobileOpen;
+
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
@@ -65,7 +74,7 @@ export function Shell() {
         body: `${t.customer.name || t.customer.email || 'User'} · ${t.subject}`,
         route: '/support/inbox',
         ts: t.lastMessageAt,
-      })
+      }),
     );
 
     const feedbacks = feedbackData?.success ? feedbackData.data.items : [];
@@ -79,7 +88,7 @@ export function Shell() {
         body: (f.appExperience || f.timeSavingNote || 'User left feedback').slice(0, 90),
         route: '/feedback',
         ts: f.createdAt,
-      })
+      }),
     );
 
     const active = activeUsersData?.success ? activeUsersData.data.displayCount : 0;
@@ -98,6 +107,18 @@ export function Shell() {
     { name: 'Settings', href: '/settings/profile', icon: Settings },
   ];
 
+  const backdropVisible = !isDesktop && mobileOpen;
+
+  const toggleSidebar = () => {
+    if (isDesktop) setDesktopCollapsed((c) => !c);
+    else setMobileOpen((o) => !o);
+  };
+
+  const closeMobile = () => setMobileOpen(false);
+  const afterNav = () => {
+    if (!isDesktop) closeMobile();
+  };
+
   return (
     <div className="min-h-screen bg-[#f0fdf4] selection:bg-emerald-200 overflow-hidden isolate">
       {/* Decorative background blurs */}
@@ -105,203 +126,124 @@ export function Shell() {
       <div className="fixed top-1/2 -left-24 w-[400px] h-[400px] bg-teal-100 rounded-full blur-[100px] opacity-20 -z-10" />
       <div className="fixed bottom-0 right-1/4 w-[300px] h-[300px] bg-emerald-100 rounded-full blur-[80px] opacity-20 -z-10" />
 
-      {/* Mobile sidebar */}
-      <div className={cn(
-        "fixed inset-0 z-50 flex lg:hidden transition-opacity duration-300 ease-linear",
-        sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"
-      )}>
-        <div className="fixed inset-0 bg-emerald-950/40 backdrop-blur-md" onClick={() => setSidebarOpen(false)} />
-        <div className={cn(
-          "relative flex flex-col w-full max-w-xs flex-1 bg-white/90 backdrop-blur-2xl transition duration-300 ease-in-out transform border-r border-emerald-100",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        )}>
-          <div className="flex h-16 items-center justify-between px-6 border-b border-emerald-50">
-             <Link to="/" className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-emerald-600 rounded flex items-center justify-center text-white font-bold text-xl italic">F</div>
-              <span className="font-bold text-xl tracking-tight text-emerald-900">Farely</span>
-            </Link>
-            <button onClick={() => setSidebarOpen(false)} className="-m-2.5 p-2.5 text-emerald-700">
-              <X className="h-6 w-6" />
-            </button>
-          </div>
-          <nav className="flex flex-1 flex-col p-4">
-            <ul className="flex flex-1 flex-col gap-y-7">
-              <li>
-                <ul className="-mx-2 space-y-1">
-                  {navigation.map((item) => (
-                    <li key={item.name}>
-                      <NavLink
-                        to={item.href}
-                        className={({ isActive }) => cn(
-                          "group flex gap-x-3 rounded-xl p-2.5 text-sm font-semibold leading-6 transition-all",
-                          isActive ? "bg-emerald-100/80 text-emerald-700 shadow-sm" : "text-emerald-900/60 hover:text-emerald-700 hover:bg-emerald-50/50"
-                        )}
-                        onClick={() => setSidebarOpen(false)}
-                      >
-                        <item.icon className="h-6 w-6 shrink-0" />
-                        {item.name}
-                      </NavLink>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            </ul>
-          </nav>
-        </div>
-      </div>
+      {backdropVisible ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-[45] cursor-default bg-emerald-950/40 backdrop-blur-md lg:hidden"
+          aria-label="Close menu"
+          onClick={closeMobile}
+        />
+      ) : null}
 
-      {/* Desktop sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
-        <div className="flex grow flex-col gap-y-5 overflow-y-auto border-r border-emerald-100 bg-white/40 backdrop-blur-xl px-6 pb-4">
-          <div className="flex h-16 shrink-0 items-center">
-            <Link to="/" className="flex items-center gap-2">
-              <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl italic shadow-lg shadow-emerald-200">F</div>
-              <span className="font-bold text-xl tracking-tight text-emerald-900">Farely<span className="text-emerald-600">Admin</span></span>
-            </Link>
-          </div>
-          <nav className="flex flex-1 flex-col">
-            <ul className="flex flex-1 flex-col gap-y-7">
-               <li>
-                <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest px-2 mb-2">Core</div>
-                <ul className="-mx-2 space-y-1">
-                  {navigation.map((item) => (
-                    <li key={item.name}>
-                      <NavLink
-                        to={item.href}
-                        className={({ isActive }) => cn(
-                          "group flex gap-x-3 rounded-xl p-2.5 text-sm font-semibold leading-6 transition-all",
-                          isActive 
-                            ? "bg-emerald-100/60 text-emerald-700 shadow-sm border-r-4 border-emerald-600 rounded-r-none" 
-                            : "text-emerald-900/50 hover:text-emerald-700 hover:bg-emerald-50/50"
-                        )}
-                      >
-                        <item.icon className={cn("h-5 w-5 shrink-0 transition-colors", location.pathname === item.href ? "text-emerald-600" : "text-emerald-300 group-hover:text-emerald-600")} />
-                        {item.name}
-                      </NavLink>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-              <li className="mt-auto">
-                <ul className="-mx-2 space-y-1">
-                  {secondaryNavigation.map((item) => (
-                    <li key={item.name}>
-                      <NavLink
-                        to={item.href}
-                        className={({ isActive }) => cn(
-                          "group flex gap-x-3 rounded-xl p-2.5 text-sm font-semibold leading-6 text-emerald-900/50 hover:text-emerald-700 hover:bg-emerald-50/50"
-                        )}
-                      >
-                        <item.icon className="h-5 w-5 shrink-0 text-emerald-300 group-hover:text-emerald-700" />
-                        {item.name}
-                      </NavLink>
-                    </li>
-                  ))}
-                  <li>
-                    <button
-                      onClick={logout}
-                      className="group -mx-2 flex w-full gap-x-3 rounded-xl p-2.5 text-sm font-semibold leading-6 text-emerald-900/50 hover:text-red-600 hover:bg-red-50/50 transition-all"
-                    >
-                      <LogOut className="h-5 w-5 shrink-0 text-emerald-300 group-hover:text-red-600" />
-                      Sign Out
-                    </button>
-                  </li>
-                </ul>
-              </li>
-            </ul>
-          </nav>
-           <div className="pt-4 border-t border-emerald-100 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full border-2 border-emerald-200 p-0.5">
-                 <img
-                  className="h-full w-full rounded-full object-cover"
-                  src={user?.avatar}
-                  alt={user?.fullName}
-                />
-              </div>
-              <div>
-                 <div className="text-sm font-bold text-emerald-900">{user?.fullName}</div>
-                 <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-tighter">{user?.role}</div>
-              </div>
-           </div>
-        </div>
-      </div>
+      {/* Single sidebar for all breakpoints */}
+      <aside
+        id="farely-admin-sidebar"
+        aria-hidden={!sidebarExpanded}
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 flex w-72 flex-col shadow-xl shadow-emerald-900/10 transition-transform duration-300 ease-out lg:shadow-none lg:rounded-none',
+          sidebarExpanded ? 'translate-x-0' : '-translate-x-full',
+        )}
+      >
+        <AppSidebar
+          pathname={location.pathname}
+          user={user}
+          navigation={navigation}
+          secondaryNavigation={secondaryNavigation}
+          onLogout={logout}
+          afterNavAction={afterNav}
+          showClose={!isDesktop}
+          onClose={closeMobile}
+        />
+      </aside>
 
-      <div className="lg:pl-72">
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-emerald-100 bg-white/40 backdrop-blur-xl px-4 sm:gap-x-6 sm:px-6 lg:px-8">
-          <button onClick={() => setSidebarOpen(true)} className="-m-2.5 p-2.5 text-emerald-700 lg:hidden">
+      <div className={cn('min-h-screen min-w-0 transition-[padding] duration-300 ease-out', isDesktop && !desktopCollapsed ? 'pl-72' : '')}>
+        <div className="sticky top-0 z-40 flex h-16 min-w-0 shrink-0 items-center gap-x-2 border-b border-emerald-100 bg-white/40 backdrop-blur-xl px-3 sm:gap-x-4 sm:px-6 lg:px-8">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-expanded={sidebarExpanded}
+            aria-controls="farely-admin-sidebar"
+            className={cn(
+              'shrink-0 flex-shrink-0 -m-2.5 p-2.5 text-emerald-700 hover:bg-emerald-50 rounded-lg outline-none ring-emerald-500/30 focus-visible:ring-4',
+              isDesktop && !desktopCollapsed && 'rounded-lg border border-emerald-100/80 bg-white/70',
+            )}
+            title={isDesktop ? (desktopCollapsed ? 'Expand navigation' : 'Collapse navigation') : 'Menu'}
+          >
             <Menu className="h-6 w-6" />
           </button>
-          
-          <div className="h-6 w-px bg-emerald-100 lg:hidden" />
 
-          <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
-            <div className="flex flex-1 items-center">
-              <div className="relative w-full max-w-md">
-                <Search className="pointer-events-none absolute inset-y-0 left-0 h-full w-5 text-emerald-300 ml-4" />
+          <div className="h-6 w-px shrink-0 bg-emerald-100" aria-hidden />
+
+          <div className="flex min-w-0 flex-1 gap-x-2 self-stretch sm:gap-x-4 lg:gap-x-6">
+            <div className="flex min-w-0 flex-1 items-center">
+              <div className="relative min-w-0 w-full max-w-md">
+                <Search className="pointer-events-none absolute inset-y-0 left-0 h-full w-5 text-emerald-300 ml-3 sm:ml-4" />
                 <input
-                  className="block h-10 w-full rounded-full border border-emerald-100 bg-white/50 pl-11 pr-3 text-sm placeholder:text-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all border-none shadow-sm"
+                  className="block h-10 w-full rounded-full border-none bg-white/50 pl-10 sm:pl-11 pr-2 sm:pr-3 text-xs sm:text-sm placeholder:text-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all shadow-sm"
                   placeholder="Ask anything..."
                   type="search"
+                  aria-label="Search"
                 />
               </div>
             </div>
-            
-            <div className="flex items-center gap-x-4 lg:gap-x-6">
+
+            <div className="flex shrink-0 items-center gap-x-2 sm:gap-x-4 lg:gap-x-6">
               <div className="relative">
-              <button
-                type="button"
-                onClick={() => setNotificationsOpen((p) => !p)}
-                className="-m-2.5 p-2.5 text-emerald-400 hover:text-emerald-600 transition-colors relative"
-              >
-                <Bell className="h-6 w-6" />
-                {unreadCount > 0 ? (
-                  <span className="absolute top-2 right-1 min-w-4 h-4 px-1 text-[10px] leading-4 text-white text-center bg-red-500 rounded-full border border-white shadow-sm">
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
+                <button
+                  type="button"
+                  onClick={() => setNotificationsOpen((p) => !p)}
+                  className="-m-2.5 shrink-0 flex-shrink-0 p-2.5 text-emerald-400 hover:text-emerald-600 transition-colors relative"
+                  aria-expanded={notificationsOpen}
+                >
+                  <Bell className="h-6 w-6" />
+                  {unreadCount > 0 ? (
+                    <span className="absolute top-2 right-1 min-w-4 h-4 px-1 text-[10px] leading-4 text-white text-center bg-red-500 rounded-full border border-white shadow-sm">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  ) : null}
+                </button>
+                {notificationsOpen ? (
+                  <div className="absolute right-0 mt-2 w-[min(340px,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-xl z-50">
+                    <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-900">Notifications</p>
+                      <button
+                        type="button"
+                        onClick={() => setNotificationsOpen(false)}
+                        className="text-xs text-slate-500 hover:text-slate-700 shrink-0"
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <div className="max-h-80 overflow-auto">
+                      {notifications.length === 0 ? (
+                        <p className="px-3 py-4 text-sm text-slate-500">No notifications right now.</p>
+                      ) : (
+                        notifications.map((n) => (
+                          <button
+                            type="button"
+                            key={n.id}
+                            onClick={() => {
+                              setNotificationsOpen(false);
+                              navigate(n.route);
+                            }}
+                            className="w-full text-left px-3 py-3 border-b border-slate-100 hover:bg-emerald-50/40 transition-colors"
+                          >
+                            <p className="text-sm font-semibold text-slate-900">{n.title}</p>
+                            <p className="text-xs text-slate-600 mt-1">{n.body}</p>
+                            {n.ts ? <p className="text-[10px] text-slate-400 mt-1">{formatDate(n.ts)}</p> : null}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 ) : null}
-              </button>
-              {notificationsOpen ? (
-                <div className="absolute right-0 mt-2 w-[340px] rounded-xl border border-slate-200 bg-white shadow-xl z-50">
-                  <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
-                    <p className="text-sm font-semibold text-slate-900">Notifications</p>
-                    <button
-                      type="button"
-                      onClick={() => setNotificationsOpen(false)}
-                      className="text-xs text-slate-500 hover:text-slate-700"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <div className="max-h-80 overflow-auto">
-                    {notifications.length === 0 ? (
-                      <p className="px-3 py-4 text-sm text-slate-500">No notifications right now.</p>
-                    ) : (
-                      notifications.map((n) => (
-                        <button
-                          type="button"
-                          key={n.id}
-                          onClick={() => {
-                            setNotificationsOpen(false);
-                            navigate(n.route);
-                          }}
-                          className="w-full text-left px-3 py-3 border-b border-slate-100 hover:bg-emerald-50/40 transition-colors"
-                        >
-                          <p className="text-sm font-semibold text-slate-900">{n.title}</p>
-                          <p className="text-xs text-slate-600 mt-1">{n.body}</p>
-                          {n.ts ? <p className="text-[10px] text-slate-400 mt-1">{formatDate(n.ts)}</p> : null}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </div>
-              ) : null}
               </div>
             </div>
           </div>
         </div>
 
-        <main className="py-8 px-4 sm:px-6 lg:px-8">
-           <Outlet />
+        <main className="py-8 px-4 sm:px-6 lg:px-8 min-w-0">
+          <Outlet />
         </main>
       </div>
     </div>

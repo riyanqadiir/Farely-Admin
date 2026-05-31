@@ -17,6 +17,8 @@ import {
 } from './models';
 import { ApiError, ApiSuccess, RideStatus, ThreadPriority, ThreadStatus } from './types';
 import { sendAdminCredentialEmail, sendSupportReplyEmail } from './brevoSend';
+import { PREDEFINED_AREAS, getCityCenter, getCities } from './predefined-areas';
+import { isGoogleConfigured, measureTraffic } from './google-traffic';
 
 const router = Router();
 
@@ -27,6 +29,16 @@ const parseLimit = (limitParam: unknown): number => {
   const parsed = Number(limitParam);
   if (!Number.isFinite(parsed)) return 25;
   return Math.max(1, Math.min(100, parsed));
+};
+
+/** Maps DB subdoc → API; null means truly missing (not the old 0,0 placeholder). */
+const rideCoordsDto = (c: unknown): { latitude: number; longitude: number } | null => {
+  if (!c || typeof c !== 'object') return null;
+  const lat = (c as { latitude?: unknown }).latitude;
+  const lng = (c as { longitude?: unknown }).longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) return null;
+  if (lat === 0 && lng === 0) return null;
+  return { latitude: lat, longitude: lng };
 };
 
 const normalizeEmail = (value: unknown): string => String(value || '').trim().toLowerCase();
@@ -332,6 +344,40 @@ router.post('/admin-users/:id/reset-password', requireRole(['super_admin']), asy
   );
 });
 
+function sanitizeMobileUser(u: any, ride: { status: string; at: Date | null }, lastSeenAt: Date | null, openSupportThreads: number, activeSince: Date) {
+  const id = String(u._id);
+  const blockedRaw = (u as any).blocked;
+  const blockedUntil = (u as any).blockedUntil ? new Date((u as any).blockedUntil) : null;
+  const blockedNow =
+    Boolean(blockedRaw) && (!blockedUntil || blockedUntil.getTime() > Date.now());
+  const status: 'active' | 'inactive' | 'blocked' = blockedNow
+    ? 'blocked'
+    : lastSeenAt && lastSeenAt >= activeSince
+      ? 'active'
+      : 'inactive';
+  return {
+    id,
+    fullName: String(u.fullName || ''),
+    email: String(u.email || ''),
+    phone: String(u.phone || ''),
+    role: String(u.role || 'user'),
+    city: String(u.city || ''),
+    district: String(u.district || ''),
+    emailVerified: Boolean(u.emailVerified),
+    phoneVerified: Boolean(u.phoneVerified),
+    lastSeenAt: lastSeenAt ? new Date(lastSeenAt).toISOString() : null,
+    status,
+    lastRideStatus: ride.status,
+    lastRideAt: ride.at ? new Date(ride.at).toISOString() : null,
+    openSupportThreads,
+    createdAt: (u.createdAt ? new Date(u.createdAt) : new Date()).toISOString(),
+    blocked: blockedNow,
+    blockedAt: (u as any).blockedAt ? new Date((u as any).blockedAt).toISOString() : null,
+    blockedUntil: blockedUntil ? blockedUntil.toISOString() : null,
+    blockedReason: (u as any).blockedReason ? String((u as any).blockedReason) : null,
+  };
+}
+
 router.get('/users/mobile', async (req: any, res) => {
   const limit = parseLimit(req.query.limit);
   const q = String(req.query.q || '').trim().toLowerCase();
@@ -375,26 +421,202 @@ router.get('/users/mobile', async (req: any, res) => {
     const lastSeenAt = presenceMap.get(uid) || (u.lastActiveAt ? new Date(u.lastActiveAt) : null);
     const ride = latestRideMap.get(uid) || { status: 'none', at: null };
     const openSupportThreads = openSupportMap.get(uid) || 0;
-    const status = lastSeenAt && lastSeenAt >= activeSince ? 'active' : 'inactive';
-    return {
-      id: uid,
-      fullName: String(u.fullName || ''),
-      email: String(u.email || ''),
-      phone: String(u.phone || ''),
-      role: String(u.role || 'user'),
-      city: String(u.city || ''),
-      district: String(u.district || ''),
-      emailVerified: Boolean(u.emailVerified),
-      phoneVerified: Boolean(u.phoneVerified),
-      lastSeenAt: lastSeenAt ? new Date(lastSeenAt).toISOString() : null,
-      status,
-      lastRideStatus: ride.status,
-      lastRideAt: ride.at ? new Date(ride.at).toISOString() : null,
-      openSupportThreads,
-      createdAt: (u.createdAt ? new Date(u.createdAt) : new Date()).toISOString(),
-    };
+    return sanitizeMobileUser(u, ride, lastSeenAt, openSupportThreads, activeSince);
   });
   return res.json(ok({ items }));
+});
+
+router.get('/users/mobile/:id', async (req: any, res) => {
+  const id = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid user id'));
+  }
+  const user = await AppUserModel().findById(id).lean();
+  if (!user) return res.status(404).json(fail('NOT_FOUND', 'User not found'));
+
+  const activeSince = new Date(Date.now() - 168 * 60 * 60 * 1000);
+  const [presence, rides, supportThreads] = await Promise.all([
+    UserPresenceModel().findOne({ userId: id }).lean(),
+    RideSnapshotModel().find({ userId: id }).sort({ createdAt: -1 }).limit(50).lean(),
+    SupportThreadModel().find({ 'customer.userId': id }).sort({ lastMessageAt: -1 }).limit(10).lean(),
+  ]);
+
+  const lastSeenAt = (presence as any)?.lastSeenAt
+    ? new Date((presence as any).lastSeenAt)
+    : (user as any).lastActiveAt
+      ? new Date((user as any).lastActiveAt)
+      : null;
+  const latestRide = rides[0] || null;
+  const openSupportThreads = supportThreads.filter((t: any) =>
+    ['open', 'in_progress'].includes(String(t.status)),
+  ).length;
+
+  const summary = rides.reduce(
+    (acc, r) => {
+      acc.totalRides += 1;
+      if (String(r.status) === 'ride_confirmed') acc.confirmedRides += 1;
+      if (typeof r.estimatedFare === 'number') {
+        acc.fareSum += r.estimatedFare;
+        acc.fareCount += 1;
+      }
+      const pk = String(r.pickup || '').split(',')[0].trim();
+      const dk = String(r.destination || '').split(',')[0].trim();
+      if (pk) acc.pickupCounts[pk] = (acc.pickupCounts[pk] || 0) + 1;
+      if (dk) acc.destinationCounts[dk] = (acc.destinationCounts[dk] || 0) + 1;
+      return acc;
+    },
+    {
+      totalRides: 0,
+      confirmedRides: 0,
+      fareSum: 0,
+      fareCount: 0,
+      pickupCounts: {} as Record<string, number>,
+      destinationCounts: {} as Record<string, number>,
+    },
+  );
+
+  const topPickup = Object.entries(summary.pickupCounts).sort((a, b) => b[1] - a[1])[0] || null;
+  const topDestination =
+    Object.entries(summary.destinationCounts).sort((a, b) => b[1] - a[1])[0] || null;
+
+  const profile = sanitizeMobileUser(
+    user,
+    latestRide ? { status: String(latestRide.status), at: (latestRide as any).createdAt || null } : { status: 'none', at: null },
+    lastSeenAt,
+    openSupportThreads,
+    activeSince,
+  );
+
+  return res.json(
+    ok({
+      profile,
+      stats: {
+        totalRides: summary.totalRides,
+        confirmedRides: summary.confirmedRides,
+        avgFare: summary.fareCount ? Number((summary.fareSum / summary.fareCount).toFixed(2)) : null,
+        topPickup: topPickup ? { name: topPickup[0], count: topPickup[1] } : null,
+        topDestination: topDestination
+          ? { name: topDestination[0], count: topDestination[1] }
+          : null,
+      },
+      recentRides: rides.slice(0, 10).map((r: any) => ({
+        id: r.sourceId,
+        provider: r.provider,
+        pickup: r.pickup,
+        destination: r.destination,
+        status: r.status,
+        estimatedFare: typeof r.estimatedFare === 'number' ? r.estimatedFare : null,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+      })),
+      supportThreads: supportThreads.map((t: any) => ({
+        id: String(t._id),
+        subject: t.subject,
+        status: t.status,
+        priority: t.priority,
+        lastMessageAt: t.lastMessageAt ? new Date(t.lastMessageAt).toISOString() : null,
+      })),
+    }),
+  );
+});
+
+router.post(
+  '/users/mobile/:id/block',
+  requireRole(['super_admin', 'support']),
+  async (req: any, res) => {
+    const id = String(req.params.id || '');
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid user id'));
+    }
+    const daysRaw = req.body?.days;
+    const reason = String(req.body?.reason || '').trim().slice(0, 500);
+    if (!reason) return res.status(400).json(fail('VALIDATION_ERROR', 'reason is required'));
+
+    let blockedUntil: Date | null = null;
+    if (daysRaw !== undefined && daysRaw !== null && String(daysRaw).toLowerCase() !== 'permanent') {
+      const n = Number(daysRaw);
+      if (!Number.isFinite(n) || n <= 0 || n > 365) {
+        return res.status(400).json(fail('VALIDATION_ERROR', 'days must be 1..365 or "permanent"'));
+      }
+      blockedUntil = new Date(Date.now() + n * 24 * 60 * 60 * 1000);
+    }
+
+    const updated = await AppUserModel().findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          blocked: true,
+          blockedAt: new Date(),
+          blockedUntil,
+          blockedReason: reason,
+          blockedByAdminId: String(req.admin?.sub || 'unknown'),
+        },
+      },
+      { new: true },
+    );
+    if (!updated) return res.status(404).json(fail('NOT_FOUND', 'User not found'));
+
+    await AuditLogModel().create({
+      action: 'user.mobile.blocked',
+      actorId: req.admin?.sub || 'unknown',
+      metadata: { userId: id, reason, blockedUntil: blockedUntil?.toISOString() || null },
+    });
+
+    return res.json(
+      ok({
+        userId: id,
+        blocked: true,
+        blockedUntil: blockedUntil ? blockedUntil.toISOString() : null,
+        blockedReason: reason,
+      }),
+    );
+  },
+);
+
+router.post(
+  '/users/mobile/:id/unblock',
+  requireRole(['super_admin', 'support']),
+  async (req: any, res) => {
+    const id = String(req.params.id || '');
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid user id'));
+    }
+    const updated = await AppUserModel().findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          blocked: false,
+          blockedAt: null,
+          blockedUntil: null,
+          blockedReason: null,
+          blockedByAdminId: null,
+        },
+      },
+      { new: true },
+    );
+    if (!updated) return res.status(404).json(fail('NOT_FOUND', 'User not found'));
+
+    await AuditLogModel().create({
+      action: 'user.mobile.unblocked',
+      actorId: req.admin?.sub || 'unknown',
+      metadata: { userId: id },
+    });
+    return res.json(ok({ userId: id, blocked: false }));
+  },
+);
+
+router.delete('/users/mobile/:id', requireRole(['super_admin']), async (req: any, res) => {
+  const id = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json(fail('VALIDATION_ERROR', 'Invalid user id'));
+  }
+  const deleted = await AppUserModel().findByIdAndDelete(id);
+  if (!deleted) return res.status(404).json(fail('NOT_FOUND', 'User not found'));
+  await AuditLogModel().create({
+    action: 'user.mobile.deleted',
+    actorId: req.admin?.sub || 'unknown',
+    metadata: { userId: id, email: (deleted as any).email || null },
+  });
+  return res.json(ok({ userId: id, deleted: true }));
 });
 
 router.get('/metrics/traffic', async (req, res) => {
@@ -498,6 +720,270 @@ router.get('/metrics/active-users', async (req, res) => {
       fromRideActivity: rideUserIds.length,
       displayCount: Math.max(fromPresence, rideUserIds.length),
     })
+  );
+});
+
+function looksLikePlusCode(value: string): boolean {
+  return /[A-Z0-9]{4,}\+[A-Z0-9]{2,}/i.test(value);
+}
+
+function cleanLocationName(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  if (looksLikePlusCode(trimmed)) return null;
+  const withoutCountry = trimmed.replace(/,\s*Pakistan\s*$/i, '');
+  const segments = withoutCountry.split(',').map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
+  const candidate = segments.slice(0, 2).join(', ');
+  if (candidate.length > 80) return candidate.slice(0, 80) + '…';
+  return candidate;
+}
+
+function roundCoord(n: number, step = 0.005): number {
+  return Math.round(n / step) * step;
+}
+
+router.get('/metrics/area-frequency', async (req, res) => {
+  const requestedDays = Math.min(365, Math.max(1, Number(req.query.days) || 7));
+  const limit = Math.min(20, Math.max(3, Number(req.query.limit) || 10));
+
+  const tryWindows = Array.from(new Set([requestedDays, 30, 90, 365])).filter(
+    (d) => d >= requestedDays,
+  );
+
+  let rides: any[] = [];
+  let usedDays = requestedDays;
+  let usedFallback = false;
+  for (const d of tryWindows) {
+    const since = new Date(Date.now() - d * 24 * 60 * 60 * 1000);
+    rides = await RideSnapshotModel().find({ createdAt: { $gte: since } }).lean();
+    if (rides.length > 0) {
+      usedDays = d;
+      usedFallback = d !== requestedDays;
+      break;
+    }
+  }
+
+  if (rides.length === 0) {
+    rides = await RideSnapshotModel().find({}).limit(2000).lean();
+    if (rides.length > 0) {
+      usedFallback = true;
+      usedDays = 0;
+    }
+  }
+
+  const since = usedDays > 0 ? new Date(Date.now() - usedDays * 24 * 60 * 60 * 1000) : new Date(0);
+
+  type Bucket = {
+    key: string;
+    name: string | null;
+    sumLat: number;
+    sumLng: number;
+    sampleCount: number;
+    pickupCount: number;
+    destinationCount: number;
+    pickupConfirmed: number;
+    destinationConfirmed: number;
+  };
+  const buckets = new Map<string, Bucket>();
+
+  const upsert = (
+    type: 'pickup' | 'destination',
+    raw: string | undefined,
+    coords: { latitude?: number; longitude?: number } | undefined,
+    confirmed: boolean,
+  ): void => {
+    const name = cleanLocationName(raw);
+    const lat =
+      typeof coords?.latitude === 'number' && Number.isFinite(coords.latitude) ? coords.latitude : null;
+    const lng =
+      typeof coords?.longitude === 'number' && Number.isFinite(coords.longitude) ? coords.longitude : null;
+
+    const key = name
+      ? `n:${name.toLowerCase()}`
+      : lat !== null && lng !== null
+        ? `c:${roundCoord(lat).toFixed(3)}:${roundCoord(lng).toFixed(3)}`
+        : null;
+    if (!key) return;
+
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        key,
+        name,
+        sumLat: 0,
+        sumLng: 0,
+        sampleCount: 0,
+        pickupCount: 0,
+        destinationCount: 0,
+        pickupConfirmed: 0,
+        destinationConfirmed: 0,
+      };
+      buckets.set(key, bucket);
+    }
+    if (lat !== null && lng !== null) {
+      bucket.sumLat += lat;
+      bucket.sumLng += lng;
+      bucket.sampleCount += 1;
+    }
+    if (type === 'pickup') {
+      bucket.pickupCount += 1;
+      if (confirmed) bucket.pickupConfirmed += 1;
+    } else {
+      bucket.destinationCount += 1;
+      if (confirmed) bucket.destinationConfirmed += 1;
+    }
+  };
+
+  for (const ride of rides) {
+    const confirmed = String(ride.status) === 'ride_confirmed';
+    upsert('pickup', ride.pickup, ride.pickupCoords, confirmed);
+    upsert('destination', ride.destination, ride.destinationCoords, confirmed);
+  }
+
+  const rawItems = Array.from(buckets.values())
+    .map((b) => ({
+      key: b.key,
+      name: b.name,
+      lat: b.sampleCount ? Number((b.sumLat / b.sampleCount).toFixed(6)) : null,
+      lng: b.sampleCount ? Number((b.sumLng / b.sampleCount).toFixed(6)) : null,
+      pickupCount: b.pickupCount,
+      destinationCount: b.destinationCount,
+      pickupConfirmed: b.pickupConfirmed,
+      destinationConfirmed: b.destinationConfirmed,
+      totalCount: b.pickupCount + b.destinationCount,
+    }))
+    .filter((b) => b.totalCount > 0)
+    .sort((a, b) => b.totalCount - a.totalCount);
+
+  const maxTotal = rawItems.reduce((m, i) => Math.max(m, i.totalCount), 0) || 1;
+
+  const items = rawItems.slice(0, limit).map((item) => {
+    const intensity = item.totalCount / maxTotal;
+    let surgeMultiplier = 1.0;
+    let surgeLevel: 'high' | 'medium' | 'low' | 'normal' = 'normal';
+    if (intensity >= 0.7) {
+      surgeMultiplier = 1.5;
+      surgeLevel = 'high';
+    } else if (intensity >= 0.4) {
+      surgeMultiplier = 1.25;
+      surgeLevel = 'medium';
+    } else if (intensity >= 0.2) {
+      surgeMultiplier = 1.1;
+      surgeLevel = 'low';
+    }
+    return {
+      ...item,
+      intensity: Number(intensity.toFixed(3)),
+      surgeMultiplier,
+      surgeLevel,
+      surgePercent: Math.round((surgeMultiplier - 1) * 100),
+    };
+  });
+
+  return res.json(
+    ok({
+      days: usedDays,
+      requestedDays,
+      usedFallback,
+      windowStart: since.toISOString(),
+      maxTotal,
+      items,
+    }),
+  );
+});
+
+function surgeFromRatio(ratio: number): {
+  surgeMultiplier: number;
+  surgeLevel: 'high' | 'medium' | 'low' | 'normal';
+  surgePercent: number;
+} {
+  let surgeMultiplier = 1.0;
+  let surgeLevel: 'high' | 'medium' | 'low' | 'normal' = 'normal';
+  if (ratio >= 1.5) {
+    surgeMultiplier = 1.5;
+    surgeLevel = 'high';
+  } else if (ratio >= 1.25) {
+    surgeMultiplier = 1.25;
+    surgeLevel = 'medium';
+  } else if (ratio >= 1.1) {
+    surgeMultiplier = 1.1;
+    surgeLevel = 'low';
+  }
+  return {
+    surgeMultiplier,
+    surgeLevel,
+    surgePercent: Math.round((surgeMultiplier - 1) * 100),
+  };
+}
+
+router.get('/metrics/traffic-hotspots', async (req, res) => {
+  if (!isGoogleConfigured()) {
+    return res.status(503).json(
+      fail(
+        'CONFIG_MISSING',
+        'GOOGLE_MAPS_API_KEY is not set on the backend. Add it to backend/.env to enable live traffic hotspots.',
+      ),
+    );
+  }
+
+  const cityFilter = req.query.city ? String(req.query.city).toLowerCase().trim() : null;
+  const areas = cityFilter
+    ? PREDEFINED_AREAS.filter((a) => a.city.toLowerCase() === cityFilter)
+    : PREDEFINED_AREAS;
+
+  const measurements = await Promise.all(
+    areas.map(async (area) => {
+      const measurement = await measureTraffic(area, getCityCenter(area.city));
+      return { area, measurement };
+    }),
+  );
+
+  const items = measurements
+    .map(({ area, measurement }) => {
+      const ratio = measurement?.ratio ?? null;
+      const tier = ratio !== null ? surgeFromRatio(ratio) : { surgeMultiplier: 1, surgeLevel: 'normal' as const, surgePercent: 0 };
+      return {
+        key: area.key,
+        name: area.name,
+        city: area.city,
+        lat: area.lat,
+        lng: area.lng,
+        duration: measurement?.duration ?? null,
+        durationInTraffic: measurement?.durationInTraffic ?? null,
+        congestionRatio: ratio !== null ? Number(ratio.toFixed(3)) : null,
+        delayMinutes:
+          measurement && measurement.duration > 0
+            ? Math.max(0, Math.round((measurement.durationInTraffic - measurement.duration) / 60))
+            : null,
+        ...tier,
+        available: measurement !== null,
+      };
+    })
+    .sort((a, b) => (b.congestionRatio || 0) - (a.congestionRatio || 0));
+
+  const successfulItems = items.filter((i) => i.available);
+  const highSurgeCount = items.filter((i) => i.surgeLevel === 'high').length;
+  const avgDelayMinutes = successfulItems.length
+    ? Math.round(
+        successfulItems.reduce((s, i) => s + (i.delayMinutes || 0), 0) / successfulItems.length,
+      )
+    : 0;
+
+  return res.json(
+    ok({
+      fetchedAt: new Date().toISOString(),
+      cityFilter,
+      cities: getCities(),
+      summary: {
+        totalAreas: items.length,
+        availableAreas: successfulItems.length,
+        highSurgeCount,
+        avgDelayMinutes,
+      },
+      items,
+    }),
   );
 });
 
@@ -669,8 +1155,8 @@ router.get('/rides/logs', async (req, res) => {
     ...item,
     id: item.sourceId,
     carAc: Boolean((item as any).carAc),
-    pickupCoords: item.pickupCoords || { latitude: 0, longitude: 0 },
-    destinationCoords: item.destinationCoords || { latitude: 0, longitude: 0 },
+    pickupCoords: rideCoordsDto(item.pickupCoords),
+    destinationCoords: rideCoordsDto(item.destinationCoords),
     userConfirmedAt: item.userConfirmedAt || null,
   }));
   const page = mapped.slice(cursor, cursor + limit);

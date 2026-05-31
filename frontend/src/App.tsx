@@ -13,6 +13,7 @@ import { Shell } from './components/layout/Shell';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import RideLogsPage from './pages/RideLogsPage';
+import RideJourneysPage from './pages/RideJourneysPage';
 import SupportInboxPage from './pages/SupportInboxPage';
 import HotspotsPage from './pages/HotspotsPage';
 import FeedbackListPage from './pages/FeedbackListPage';
@@ -45,6 +46,7 @@ export default function App() {
               <Route element={<Shell />}>
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/rides/logs" element={<RideLogsPage />} />
+                <Route path="/rides/journeys" element={<RideJourneysPage />} />
                 <Route path="/rides/hotspots" element={<HotspotsPage />} />
                 <Route path="/support/inbox" element={<SupportInboxPage />} />
                 <Route path="/feedback" element={<FeedbackListPage />} />

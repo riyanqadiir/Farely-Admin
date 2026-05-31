@@ -11,33 +11,118 @@ import {
 
 const MAX_ATTEMPTS = 3;
 
+function nonEmptyPickupDest(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  const s = String(v).trim();
+  return s.length > 0 ? s : undefined;
+}
+
+function coordsIfValid(p: unknown): { latitude: number; longitude: number } | undefined {
+  if (!p || typeof p !== 'object') return undefined;
+  const lat = (p as { latitude?: number }).latitude;
+  const lng = (p as { longitude?: number }).longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) {
+    return undefined;
+  }
+  if (lat === 0 && lng === 0) return undefined;
+  return { latitude: lat, longitude: lng };
+}
+
+/**
+ * Each `ride.*` outbox event does an upsert keyed by `sourceId`. If the payload omits
+ * pickup/destination/coords (common for status-only notifications), we must NOT `$set`
+ * those fields to empty — that was wiping good data from earlier events and produced
+ * ambiguous "— / no coordinates" rows in admin ride logs.
+ */
 const ingestRideEvent = async (event: any): Promise<void> => {
   const ride = event.payload || {};
   const sourceId = String(ride.id || event.entityId);
-  await RideSnapshotModel().updateOne(
-    { sourceId },
-    {
-      $set: {
-        sourceEventId: event.eventId,
-        sourceId,
-        userId: String(ride.userId || ''),
-        provider: String(ride.provider || 'Unknown'),
-        rideType: String(ride.rideType || 'car'),
-        carAc: Boolean(ride.carAc),
-        city: String(ride.city || 'Lahore'),
-        pickup: String(ride.pickup || ''),
-        destination: String(ride.destination || ''),
-        pickupCoords: ride.pickupCoords || undefined,
-        destinationCoords: ride.destinationCoords || undefined,
-        estimatedFare: typeof ride.estimatedFare === 'number' ? ride.estimatedFare : null,
-        status: String(ride.status || 'handoff_opened'),
-        redirectSucceeded: Boolean(ride.redirectSucceeded),
-        userConfirmedAt: ride.userConfirmedAt ? new Date(ride.userConfirmedAt) : null,
-        createdAt: ride.createdAt ? new Date(ride.createdAt) : new Date(event.occurredAt || Date.now()),
-      },
-    },
-    { upsert: true }
-  );
+  const existing = (await RideSnapshotModel().findOne({ sourceId }).lean()) as Record<string, unknown> | null;
+
+  const pickupIn = nonEmptyPickupDest(ride.pickup);
+  const destIn = nonEmptyPickupDest(ride.destination);
+  const pkCoordsIn = coordsIfValid(ride.pickupCoords);
+  const destCoordsIn = coordsIfValid(ride.destinationCoords);
+
+  const pickup = pickupIn ?? (existing ? String(existing.pickup ?? '').trim() : '');
+  const destination = destIn ?? (existing ? String(existing.destination ?? '').trim() : '');
+
+  let pickupCoords = coordsIfValid(existing?.pickupCoords);
+  let destinationCoords = coordsIfValid(existing?.destinationCoords);
+  if (pkCoordsIn) pickupCoords = pkCoordsIn;
+  if (destCoordsIn) destinationCoords = destCoordsIn;
+
+  const merged: Record<string, unknown> = {
+    sourceEventId: event.eventId,
+    sourceId,
+    userId:
+      ride.userId != null && String(ride.userId).trim() !== ''
+        ? String(ride.userId)
+        : existing?.userId != null
+          ? String(existing.userId)
+          : '',
+    provider:
+      ride.provider != null && String(ride.provider).trim() !== ''
+        ? String(ride.provider)
+        : existing?.provider != null
+          ? String(existing.provider)
+          : 'Unknown',
+    rideType:
+      ride.rideType != null && String(ride.rideType).trim() !== ''
+        ? String(ride.rideType)
+        : existing?.rideType != null
+          ? String(existing.rideType)
+          : 'car',
+    carAc:
+      typeof ride.carAc === 'boolean'
+        ? ride.carAc
+        : typeof existing?.carAc === 'boolean'
+          ? existing.carAc
+          : false,
+    city:
+      ride.city != null && String(ride.city).trim() !== ''
+        ? String(ride.city)
+        : existing?.city != null
+          ? String(existing.city)
+          : 'Lahore',
+    pickup,
+    destination,
+    estimatedFare:
+      typeof ride.estimatedFare === 'number'
+        ? ride.estimatedFare
+        : typeof existing?.estimatedFare === 'number'
+          ? existing.estimatedFare
+          : null,
+    status:
+      ride.status != null && String(ride.status).trim() !== ''
+        ? String(ride.status)
+        : existing?.status != null
+          ? String(existing.status)
+          : 'handoff_opened',
+    redirectSucceeded:
+      typeof ride.redirectSucceeded === 'boolean'
+        ? ride.redirectSucceeded
+        : typeof existing?.redirectSucceeded === 'boolean'
+          ? existing.redirectSucceeded
+          : false,
+    userConfirmedAt:
+      ride.userConfirmedAt != null
+        ? new Date(ride.userConfirmedAt)
+        : existing?.userConfirmedAt != null
+          ? new Date(existing.userConfirmedAt as Date)
+          : null,
+    createdAt:
+      ride.createdAt != null && ride.createdAt !== ''
+        ? new Date(ride.createdAt)
+        : existing?.createdAt != null
+          ? new Date(existing.createdAt as Date)
+          : new Date(event.occurredAt || Date.now()),
+  };
+
+  if (pickupCoords) merged.pickupCoords = pickupCoords;
+  if (destinationCoords) merged.destinationCoords = destinationCoords;
+
+  await RideSnapshotModel().updateOne({ sourceId }, { $set: merged }, { upsert: true });
 };
 
 const ingestSupportThreadCreated = async (event: any): Promise<void> => {

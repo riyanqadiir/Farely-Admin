@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/mocks';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -6,18 +7,15 @@ import {
   Users, 
   Car, 
   CheckCircle2, 
-  AlertCircle, 
-  TrendingUp, 
   ArrowUpRight, 
   ArrowDownRight,
   Clock,
   MessageSquare,
   ArrowRightLeft,
-  Search
+  Search,
+  MapPin,
 } from 'lucide-react';
 import { 
-  LineChart, 
-  Line, 
   XAxis, 
   YAxis, 
   CartesianGrid, 
@@ -25,16 +23,22 @@ import {
   ResponsiveContainer, 
   BarChart, 
   Bar,
-  AreaChart,
-  Area
+  LabelList,
 } from 'recharts';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
+import { reverseGeocode } from '../lib/geocode';
 
 export default function DashboardPage() {
   const { data: traffic, isLoading: trafficLoading } = useQuery({
     queryKey: ['traffic'],
     queryFn: () => api.metrics.getTraffic(),
+  });
+
+  const { data: areaFreq, isLoading: areaFreqLoading, error: areaFreqError } = useQuery({
+    queryKey: ['area-frequency', 7],
+    queryFn: () => api.metrics.getAreaFrequency({ days: 7, limit: 10 }),
+    retry: 1,
   });
 
   const { data: active } = useQuery({
@@ -46,6 +50,38 @@ export default function DashboardPage() {
     queryKey: ['threads', { limit: 100 }],
     queryFn: () => api.support.getThreads({ limit: 100 }),
   });
+
+  const areaItems = useMemo(
+    () => (areaFreq?.success ? areaFreq.data.items : []),
+    [areaFreq],
+  );
+
+  const [resolvedNames, setResolvedNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const needGeocode = areaItems.filter(
+      (a) => !a.name && a.lat !== null && a.lng !== null && !resolvedNames[a.key],
+    );
+    if (needGeocode.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        needGeocode.map(async (a) => {
+          const n = await reverseGeocode(a.lat as number, a.lng as number);
+          return [a.key, n] as const;
+        }),
+      );
+      if (cancelled) return;
+      setResolvedNames((prev) => {
+        const next = { ...prev };
+        for (const [k, v] of entries) if (v) next[k] = v;
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [areaItems, resolvedNames]);
 
   if (trafficLoading) {
     return (
@@ -69,6 +105,32 @@ export default function DashboardPage() {
     : { open: 0, inProgress: 0, resolved: 0 });
 
   const activeCount = active?.data?.displayCount;
+
+  const chartData = areaItems.map((a) => {
+    const label = a.name || resolvedNames[a.key] || 'Nearby location';
+    return {
+      key: a.key,
+      area: label.length > 28 ? label.slice(0, 27) + '…' : label,
+      fullArea: label,
+      pickups: a.pickupCount,
+      destinations: a.destinationCount,
+      pickupConfirmed: a.pickupConfirmed,
+      destinationConfirmed: a.destinationConfirmed,
+      total: a.totalCount,
+    };
+  });
+
+  const totalPickups = chartData.reduce((s, a) => s + a.pickups, 0);
+  const totalDestinations = chartData.reduce((s, a) => s + a.destinations, 0);
+  const chartHeight = Math.max(360, chartData.length * 46);
+  const windowDays = areaFreq?.success ? areaFreq.data.days : 7;
+  const usedFallbackWindow = !!(areaFreq?.success && areaFreq.data.usedFallback);
+  const windowLabel = windowDays === 0
+    ? 'all time'
+    : windowDays === 1
+      ? 'last 24 hours'
+      : `last ${windowDays} days`;
+
   const stats = [
     { name: 'Active users (24h est.)', value: activeCount, icon: Users, change: '—', trend: 'up' as const },
     { name: 'Ride Searches', value: m?.searches, icon: Search, change: '+12%', trend: 'up' as const },
@@ -128,58 +190,133 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2 shadow-xl shadow-emerald-900/5">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <CardTitle className="text-emerald-950">Traffic Volume</CardTitle>
-                <CardDescription className="text-emerald-500 font-medium">Peak demand periods</CardDescription>
+                <CardTitle className="text-emerald-950 flex items-center gap-2">
+                  <MapPin size={18} className="text-emerald-600" />
+                  Ride Volume by Area
+                </CardTitle>
+                <CardDescription className="text-emerald-500 font-medium">
+                  Top areas by pickups &amp; destinations · {windowLabel} · {totalPickups} pickups · {totalDestinations} destinations
+                  {usedFallbackWindow && (
+                    <span className="ml-2 text-amber-600 font-semibold">
+                      (no data in 7 days — showing wider window)
+                    </span>
+                  )}
+                </CardDescription>
               </div>
               <div className="flex items-center gap-4">
-                <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                  <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full shadow-sm" /> Inbound
+                <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                  <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full shadow-sm" /> Pickup
                 </div>
-                <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
-                  <span className="w-2.5 h-2.5 bg-emerald-200 rounded-full" /> Confirmed
+                <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-sky-700">
+                  <span className="w-2.5 h-2.5 bg-sky-500 rounded-full shadow-sm" /> Destination
                 </div>
               </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-[350px] pt-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={traffic?.success ? traffic.data.timeseries : []}>
-                   <defs>
-                    <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.6}/>
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="6 6" vertical={false} stroke="#ecfdf5" />
-                  <XAxis 
-                    dataKey="bucket" 
-                    tickFormatter={(val) => new Date(val).toLocaleDateString(undefined, { weekday: 'short' })}
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fontSize: 10, fontWeight: 700, fill: '#34d399' }}
-                    dy={10}
-                  />
-                  <YAxis 
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fontSize: 10, fontWeight: 700, fill: '#34d399' }}
-                    dx={-10}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      borderRadius: '16px', 
-                      border: '1px solid rgba(255,255,255,0.4)', 
-                      backdropFilter: 'blur(12px)',
-                      background: 'rgba(255,255,255,0.8)',
-                      boxShadow: '0 10px 15px -3px rgba(16,185,129,0.1)' 
-                    }}
-                  />
-                  <Area type="monotone" dataKey="searches" stroke="#059669" strokeWidth={3} fillOpacity={1} fill="url(#colorCount)" />
-                </AreaChart>
-              </ResponsiveContainer>
+            <div className="pt-4" style={{ height: chartHeight }}>
+              {areaFreqLoading ? (
+                <div className="flex h-full items-center justify-center text-sm text-emerald-500">
+                  Loading area data…
+                </div>
+              ) : areaFreqError ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                  <div className="text-sm font-bold text-red-600">Couldn't reach the admin backend</div>
+                  <div className="text-xs text-slate-500 max-w-md">
+                    The chart needs <code className="px-1 rounded bg-slate-100">/admin/metrics/area-frequency</code>.
+                    Make sure the backend is running: <code className="px-1 rounded bg-slate-100">cd backend &amp;&amp; npm run dev</code>
+                  </div>
+                </div>
+              ) : chartData.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-emerald-500/80 text-center px-6">
+                  No rides recorded yet. The chart will populate as rides come in.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartData}
+                    layout="vertical"
+                    margin={{ top: 8, right: 32, bottom: 8, left: 8 }}
+                    barCategoryGap={14}
+                    barGap={4}
+                  >
+                    <defs>
+                      <linearGradient id="pickupGradient" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#34d399" stopOpacity={0.95} />
+                        <stop offset="100%" stopColor="#059669" stopOpacity={1} />
+                      </linearGradient>
+                      <linearGradient id="destinationGradient" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#7dd3fc" stopOpacity={0.95} />
+                        <stop offset="100%" stopColor="#0284c7" stopOpacity={1} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="6 6" horizontal={false} stroke="#ecfdf5" />
+                    <XAxis
+                      type="number"
+                      allowDecimals={false}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 10, fontWeight: 700, fill: '#64748b' }}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="area"
+                      width={180}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 11, fontWeight: 700, fill: '#065f46' }}
+                      interval={0}
+                    />
+                    <Tooltip
+                      cursor={{ fill: 'rgba(16,185,129,0.06)' }}
+                      contentStyle={{
+                        borderRadius: '16px',
+                        border: '1px solid rgba(255,255,255,0.4)',
+                        backdropFilter: 'blur(12px)',
+                        background: 'rgba(255,255,255,0.92)',
+                        boxShadow: '0 10px 15px -3px rgba(16,185,129,0.1)',
+                      }}
+                      labelFormatter={(_, payload) => {
+                        const item = payload?.[0]?.payload as typeof chartData[number] | undefined;
+                        return item?.fullArea || '';
+                      }}
+                      formatter={(value: number, name) => {
+                        if (name === 'pickups') return [`${value} rides`, 'Pickups'];
+                        if (name === 'destinations') return [`${value} rides`, 'Destinations'];
+                        return [value, name];
+                      }}
+                    />
+                    <Bar
+                      dataKey="pickups"
+                      fill="url(#pickupGradient)"
+                      radius={[0, 6, 6, 0]}
+                      maxBarSize={18}
+                    >
+                      <LabelList
+                        dataKey="pickups"
+                        position="right"
+                        formatter={(value: number) => (value > 0 ? value : '')}
+                        style={{ fill: '#065f46', fontSize: 10, fontWeight: 800 }}
+                      />
+                    </Bar>
+                    <Bar
+                      dataKey="destinations"
+                      fill="url(#destinationGradient)"
+                      radius={[0, 6, 6, 0]}
+                      maxBarSize={18}
+                    >
+                      <LabelList
+                        dataKey="destinations"
+                        position="right"
+                        formatter={(value: number) => (value > 0 ? value : '')}
+                        style={{ fill: '#0c4a6e', fontSize: 10, fontWeight: 800 }}
+                      />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>

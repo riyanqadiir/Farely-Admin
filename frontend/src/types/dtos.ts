@@ -100,15 +100,74 @@ export interface MobileUserItem {
   emailVerified: boolean;
   phoneVerified: boolean;
   lastSeenAt: string | null;
-  status: 'active' | 'inactive';
+  status: 'active' | 'inactive' | 'blocked';
   lastRideStatus: string;
   lastRideAt: string | null;
   openSupportThreads: number;
   createdAt: string;
+  blocked: boolean;
+  blockedAt: string | null;
+  blockedUntil: string | null;
+  blockedReason: string | null;
 }
 
 export interface MobileUsersResponse {
   items: MobileUserItem[];
+}
+
+export interface MobileUserRecentRide {
+  id: string;
+  provider: string;
+  pickup: string;
+  destination: string;
+  status: string;
+  estimatedFare: number | null;
+  createdAt: string | null;
+}
+
+export interface MobileUserSupportThreadSummary {
+  id: string;
+  subject: string;
+  status: ThreadStatus;
+  priority: ThreadPriority;
+  lastMessageAt: string | null;
+}
+
+export interface MobileUserStats {
+  totalRides: number;
+  confirmedRides: number;
+  avgFare: number | null;
+  topPickup: { name: string; count: number } | null;
+  topDestination: { name: string; count: number } | null;
+}
+
+export interface MobileUserDetailsResponse {
+  profile: MobileUserItem;
+  stats: MobileUserStats;
+  recentRides: MobileUserRecentRide[];
+  supportThreads: MobileUserSupportThreadSummary[];
+}
+
+export interface BlockMobileUserRequest {
+  reason: string;
+  days?: number | 'permanent';
+}
+
+export interface BlockMobileUserResponse {
+  userId: string;
+  blocked: boolean;
+  blockedUntil: string | null;
+  blockedReason: string;
+}
+
+export interface UnblockMobileUserResponse {
+  userId: string;
+  blocked: false;
+}
+
+export interface DeleteMobileUserResponse {
+  userId: string;
+  deleted: true;
 }
 
 export interface TrafficSummary {
@@ -192,9 +251,10 @@ export interface RideLogItem {
   carAc: boolean;
   pickup: string;
   destination: string;
-  pickupCoords: { latitude: number; longitude: number };
-  destinationCoords: { latitude: number; longitude: number };
-  estimatedFare: number;
+  /** Absent when the snapshot never stored valid coordinates or they were wiped. */
+  pickupCoords?: { latitude: number; longitude: number } | null;
+  destinationCoords?: { latitude: number; longitude: number } | null;
+  estimatedFare: number | null;
   status: RideStatus;
   redirectSucceeded: boolean;
   createdAt: string;
@@ -301,6 +361,71 @@ export interface ActiveUsersResponse {
 
 export interface ActiveUsersQuery {
   hours?: number;
+}
+
+export type SurgeLevel = 'high' | 'medium' | 'low' | 'normal';
+
+export interface AreaFrequencyItem {
+  key: string;
+  name: string | null;
+  lat: number | null;
+  lng: number | null;
+  pickupCount: number;
+  destinationCount: number;
+  pickupConfirmed: number;
+  destinationConfirmed: number;
+  totalCount: number;
+  intensity?: number;
+  surgeMultiplier?: number;
+  surgeLevel?: SurgeLevel;
+  surgePercent?: number;
+}
+
+export interface AreaFrequencyResponse {
+  days: number;
+  requestedDays?: number;
+  usedFallback?: boolean;
+  windowStart: string;
+  maxTotal?: number;
+  items: AreaFrequencyItem[];
+}
+
+export interface AreaFrequencyQuery {
+  days?: number;
+  limit?: number;
+}
+
+export interface TrafficHotspotItem {
+  key: string;
+  name: string;
+  city: string;
+  lat: number;
+  lng: number;
+  duration: number | null;
+  durationInTraffic: number | null;
+  congestionRatio: number | null;
+  delayMinutes: number | null;
+  surgeMultiplier: number;
+  surgeLevel: SurgeLevel;
+  surgePercent: number;
+  available: boolean;
+}
+
+export interface TrafficHotspotsResponse {
+  fetchedAt: string;
+  cityFilter: string | null;
+  cities: string[];
+  summary: {
+    totalAreas: number;
+    availableAreas: number;
+    highSurgeCount: number;
+    avgDelayMinutes: number;
+  };
+  items: TrafficHotspotItem[];
+}
+
+export interface TrafficHotspotsQuery {
+  city?: string;
 }
 
 export interface FeedbackListItem {

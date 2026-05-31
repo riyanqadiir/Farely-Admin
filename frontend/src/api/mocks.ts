@@ -2,15 +2,23 @@ import {
   ApiSuccess,
   AdminUserActionResponse,
   AdminUsersResponse,
+  AreaFrequencyQuery,
+  AreaFrequencyResponse,
   AuthPayload,
+  TrafficHotspotsQuery,
+  TrafficHotspotsResponse,
+  BlockMobileUserRequest,
+  BlockMobileUserResponse,
   ChangePasswordRequest,
   CreateAdminUserRequest,
+  DeleteMobileUserResponse,
   HotspotTile,
   HotspotsQuery,
   HotspotsResponse,
   LoginRequest,
   LogoutResponse,
   MeResponse,
+  MobileUserDetailsResponse,
   MobileUsersResponse,
   PatchThreadRequest,
   PatchThreadResponse,
@@ -30,6 +38,7 @@ import {
   ActiveUsersResponse,
   ActiveUsersQuery,
   FeedbackListResponse,
+  UnblockMobileUserResponse,
   UpdateAdminUserRequest,
   UpdateMeRequest,
 } from '../types/dtos';
@@ -119,6 +128,22 @@ export const api = {
       );
       return request<ActiveUsersResponse>(`/admin/metrics/active-users${qs.toString() ? `?${qs}` : ''}`);
     },
+    getAreaFrequency: async (query?: AreaFrequencyQuery) => {
+      const qs = new URLSearchParams(
+        Object.entries(query || {})
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      );
+      return request<AreaFrequencyResponse>(`/admin/metrics/area-frequency${qs.toString() ? `?${qs}` : ''}`);
+    },
+    getTrafficHotspots: async (query?: TrafficHotspotsQuery) => {
+      const qs = new URLSearchParams(
+        Object.entries(query || {})
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      );
+      return request<TrafficHotspotsResponse>(`/admin/metrics/traffic-hotspots${qs.toString() ? `?${qs}` : ''}`);
+    },
   },
   feedback: {
     list: async (params?: { limit?: number }) => {
@@ -145,6 +170,17 @@ export const api = {
       );
       return request<MobileUsersResponse>(`/admin/users/mobile${qs.toString() ? `?${qs}` : ''}`);
     },
+    getMobile: async (id: string) =>
+      request<MobileUserDetailsResponse>(`/admin/users/mobile/${id}`),
+    blockMobile: async (id: string, payload: BlockMobileUserRequest) =>
+      request<BlockMobileUserResponse>(`/admin/users/mobile/${id}/block`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    unblockMobile: async (id: string) =>
+      request<UnblockMobileUserResponse>(`/admin/users/mobile/${id}/unblock`, { method: 'POST' }),
+    deleteMobile: async (id: string) =>
+      request<DeleteMobileUserResponse>(`/admin/users/mobile/${id}`, { method: 'DELETE' }),
   },
   support: {
     getThreads: async (query?: SupportThreadsQuery) => {
