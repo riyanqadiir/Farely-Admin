@@ -9,7 +9,12 @@ import {
   UserPresenceModel,
 } from './models';
 
-const MAX_ATTEMPTS = 3;
+const HANDOFF_SNAPSHOT_EVENTS = new Set([
+  'ride.handoff.created',
+  'ride.handoff.confirmed',
+  'ride.handoff.rejected',
+  'ride.handoff.capture_updated',
+]);
 
 function nonEmptyPickupDest(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
@@ -93,6 +98,18 @@ const ingestRideEvent = async (event: any): Promise<void> => {
         : typeof existing?.estimatedFare === 'number'
           ? existing.estimatedFare
           : null,
+    capturedFare:
+      typeof ride.capturedFare === 'number'
+        ? ride.capturedFare
+        : typeof existing?.capturedFare === 'number'
+          ? existing.capturedFare
+          : null,
+    capturedProvider:
+      ride.capturedProvider != null && String(ride.capturedProvider).trim() !== ''
+        ? String(ride.capturedProvider)
+        : existing?.capturedProvider != null
+          ? String(existing.capturedProvider)
+          : null,
     status:
       ride.status != null && String(ride.status).trim() !== ''
         ? String(ride.status)
@@ -121,6 +138,13 @@ const ingestRideEvent = async (event: any): Promise<void> => {
 
   if (pickupCoords) merged.pickupCoords = pickupCoords;
   if (destinationCoords) merged.destinationCoords = destinationCoords;
+
+  const hasRoute =
+    Boolean(String(merged.pickup || '').trim()) && Boolean(String(merged.destination || '').trim());
+  const hasCoords = Boolean(pickupCoords && destinationCoords);
+  if (!hasRoute && !hasCoords) {
+    return;
+  }
 
   await RideSnapshotModel().updateOne({ sourceId }, { $set: merged }, { upsert: true });
 };
@@ -221,7 +245,9 @@ export const runIngestOnce = async (): Promise<void> => {
     try {
       let handled = false;
       if (String(event.eventType).startsWith('ride.')) {
-        await ingestRideEvent(event);
+        if (HANDOFF_SNAPSHOT_EVENTS.has(String(event.eventType))) {
+          await ingestRideEvent(event);
+        }
         handled = true;
       } else if (event.eventType === 'support.thread.created') {
         await ingestSupportThreadCreated(event);

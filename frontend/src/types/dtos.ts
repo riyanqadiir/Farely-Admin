@@ -255,6 +255,10 @@ export interface RideLogItem {
   pickupCoords?: { latitude: number; longitude: number } | null;
   destinationCoords?: { latitude: number; longitude: number } | null;
   estimatedFare: number | null;
+  capturedFare?: number | null;
+  capturedProvider?: string | null;
+  capturedFare?: number | null;
+  capturedProvider?: string | null;
   status: RideStatus;
   redirectSucceeded: boolean;
   createdAt: string;

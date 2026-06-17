@@ -173,8 +173,24 @@ export default function RideLogsPage() {
                   </TableCell>
                   <TableCell className="align-top pt-4 whitespace-nowrap">
                     <span className="font-bold text-slate-900">
-                      {formatCurrency(typeof log.estimatedFare === 'number' ? log.estimatedFare : 0)}
+                      {formatCurrency(
+                        typeof log.capturedFare === 'number' && log.capturedFare > 0
+                          ? log.capturedFare
+                          : typeof log.estimatedFare === 'number'
+                            ? log.estimatedFare
+                            : 0,
+                      )}
                     </span>
+                    {typeof log.capturedFare === 'number' &&
+                    log.capturedFare > 0 &&
+                    typeof log.estimatedFare === 'number' &&
+                    log.estimatedFare > 0 ? (
+                      <p className="text-[11px] font-medium text-slate-500 mt-0.5">
+                        Est: {formatCurrency(log.estimatedFare)}
+                      </p>
+                    ) : typeof log.estimatedFare === 'number' && log.estimatedFare > 0 ? (
+                      <p className="text-[11px] font-medium text-amber-700 mt-0.5">Estimate only</p>
+                    ) : null}
                   </TableCell>
                   <TableCell className="align-top pt-4 whitespace-nowrap">
                     <Badge

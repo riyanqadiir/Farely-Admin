@@ -39,6 +39,8 @@ interface RideSnapshotDoc {
   pickupCoords?: { latitude: number; longitude: number };
   destinationCoords?: { latitude: number; longitude: number };
   estimatedFare?: number;
+  capturedFare?: number;
+  capturedProvider?: string;
   status: RideStatus;
   redirectSucceeded: boolean;
   userConfirmedAt?: Date | null;
@@ -234,6 +236,8 @@ export const RideSnapshotModel = (): Model<RideSnapshotDoc> =>
           latitude: Number,
           longitude: Number,
         },
+        capturedFare: { type: Number, default: null },
+        capturedProvider: { type: String, default: null },
         estimatedFare: { type: Number, default: null },
         status: { type: String, required: true, index: true },
         redirectSucceeded: { type: Boolean, default: false, index: true },

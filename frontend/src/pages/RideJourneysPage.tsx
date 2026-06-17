@@ -174,10 +174,28 @@ export default function RideJourneysPage() {
                       </Badge>
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold uppercase text-slate-400">Fare</p>
-                      <p className="text-lg font-black text-slate-900">
-                        {formatCurrency(typeof log.estimatedFare === 'number' ? log.estimatedFare : 0)}
+                      <p className="text-[10px] font-bold uppercase text-slate-400">
+                        {typeof log.capturedFare === 'number' && log.capturedFare > 0
+                          ? 'Captured fare'
+                          : 'Farely estimate'}
                       </p>
+                      <p className="text-lg font-black text-slate-900">
+                        {formatCurrency(
+                          typeof log.capturedFare === 'number' && log.capturedFare > 0
+                            ? log.capturedFare
+                            : typeof log.estimatedFare === 'number'
+                              ? log.estimatedFare
+                              : 0,
+                        )}
+                      </p>
+                      {typeof log.capturedFare === 'number' &&
+                      log.capturedFare > 0 &&
+                      typeof log.estimatedFare === 'number' &&
+                      log.estimatedFare > 0 ? (
+                        <p className="text-xs font-medium text-slate-500 mt-1">
+                          Est: {formatCurrency(log.estimatedFare)}
+                        </p>
+                      ) : null}
                     </div>
                     <Badge
                       variant={

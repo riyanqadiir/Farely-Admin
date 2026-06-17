@@ -1145,10 +1145,36 @@ router.get('/rides/logs', async (req, res) => {
   const provider = req.query.provider as string | undefined;
   const q = String(req.query.q ?? '').toLowerCase();
 
+  const includeDrafts =
+    req.query.includeDrafts === 'true' || req.query.includeDrafts === '1';
   const query: Record<string, unknown> = {};
   if (status) query.status = status;
   if (provider) query.provider = provider;
   if (q) query.$or = [{ pickup: { $regex: q, $options: 'i' } }, { destination: { $regex: q, $options: 'i' } }];
+  if (!includeDrafts) {
+    const draftGuard = {
+      status: { $ne: 'route_planned' },
+      provider: { $nin: ['Pending', 'Unknown'] },
+    };
+    if (Object.keys(query).length === 0) {
+      Object.assign(query, draftGuard);
+    } else {
+      query.$and = [...(Array.isArray(query.$and) ? query.$and : []), draftGuard];
+    }
+  }
+  if (provider) query.provider = provider;
+  if (q) query.$or = [{ pickup: { $regex: q, $options: 'i' } }, { destination: { $regex: q, $options: 'i' } }];
+  if (!includeDrafts) {
+    const draftGuard = {
+      status: { $ne: 'route_planned' },
+      provider: { $nin: ['Pending', 'Unknown'] },
+    };
+    if (Object.keys(query).length === 0) {
+      Object.assign(query, draftGuard);
+    } else {
+      query.$and = [...(Array.isArray(query.$and) ? query.$and : []), draftGuard];
+    }
+  }
 
   const items = await RideSnapshotModel().find(query).sort({ createdAt: -1 }).lean();
   const mapped = items.map((item) => ({
