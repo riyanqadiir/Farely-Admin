@@ -109,10 +109,16 @@ export interface MobileUserItem {
   blockedAt: string | null;
   blockedUntil: string | null;
   blockedReason: string | null;
+  /** False when user started signup but never set a password (cannot log in yet). */
+  passwordSet: boolean;
+  signupComplete: boolean;
 }
 
 export interface MobileUsersResponse {
   items: MobileUserItem[];
+  total: number;
+  incompleteSignupCount: number;
+  limit: number;
 }
 
 export interface MobileUserRecentRide {
@@ -255,8 +261,6 @@ export interface RideLogItem {
   pickupCoords?: { latitude: number; longitude: number } | null;
   destinationCoords?: { latitude: number; longitude: number } | null;
   estimatedFare: number | null;
-  capturedFare?: number | null;
-  capturedProvider?: string | null;
   capturedFare?: number | null;
   capturedProvider?: string | null;
   status: RideStatus;

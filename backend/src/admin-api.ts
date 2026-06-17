@@ -31,6 +31,17 @@ const parseLimit = (limitParam: unknown): number => {
   return Math.max(1, Math.min(100, parsed));
 };
 
+const parseMobileUserLimit = (limitParam: unknown): number => {
+  const parsed = Number(limitParam);
+  if (!Number.isFinite(parsed)) return 100;
+  return Math.max(1, Math.min(500, parsed));
+};
+
+const mobileUserHasPassword = (u: Record<string, unknown>): boolean => {
+  const p = u.password;
+  return typeof p === 'string' && p.length > 0;
+};
+
 /** Maps DB subdoc → API; null means truly missing (not the old 0,0 placeholder). */
 const rideCoordsDto = (c: unknown): { latitude: number; longitude: number } | null => {
   if (!c || typeof c !== 'object') return null;
@@ -39,6 +50,47 @@ const rideCoordsDto = (c: unknown): { latitude: number; longitude: number } | nu
   if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) return null;
   if (lat === 0 && lng === 0) return null;
   return { latitude: lat, longitude: lng };
+};
+
+/** Exclude drafts and snapshots wiped by partial ingest (empty route text + no coords). */
+const rideLogsListGuards = (includeDrafts: boolean): Record<string, unknown>[] => {
+  const guards: Record<string, unknown>[] = [];
+  if (!includeDrafts) {
+    guards.push({
+      status: { $ne: 'route_planned' },
+      provider: { $nin: ['Pending', 'Unknown'] },
+    });
+  }
+  guards.push({
+    $or: [
+      { pickup: { $regex: /\S/ } },
+      {
+        pickupCoords: { $exists: true },
+        'pickupCoords.latitude': { $type: 'number', $nin: [null, 0] },
+        'pickupCoords.longitude': { $type: 'number', $nin: [null, 0] },
+      },
+    ],
+  });
+  guards.push({
+    $or: [
+      { destination: { $regex: /\S/ } },
+      {
+        destinationCoords: { $exists: true },
+        'destinationCoords.latitude': { $type: 'number', $nin: [null, 0] },
+        'destinationCoords.longitude': { $type: 'number', $nin: [null, 0] },
+      },
+    ],
+  });
+  return guards;
+};
+
+const applyRideLogsGuards = (query: Record<string, unknown>, includeDrafts: boolean): void => {
+  const guards = rideLogsListGuards(includeDrafts);
+  if (Object.keys(query).length === 0) {
+    query.$and = guards;
+    return;
+  }
+  query.$and = [...(Array.isArray(query.$and) ? query.$and : []), ...guards];
 };
 
 const normalizeEmail = (value: unknown): string => String(value || '').trim().toLowerCase();
@@ -375,11 +427,13 @@ function sanitizeMobileUser(u: any, ride: { status: string; at: Date | null }, l
     blockedAt: (u as any).blockedAt ? new Date((u as any).blockedAt).toISOString() : null,
     blockedUntil: blockedUntil ? blockedUntil.toISOString() : null,
     blockedReason: (u as any).blockedReason ? String((u as any).blockedReason) : null,
+    passwordSet: mobileUserHasPassword(u),
+    signupComplete: mobileUserHasPassword(u) && Boolean(u.emailVerified),
   };
 }
 
 router.get('/users/mobile', async (req: any, res) => {
-  const limit = parseLimit(req.query.limit);
+  const limit = parseMobileUserLimit(req.query.limit);
   const q = String(req.query.q || '').trim().toLowerCase();
   const activeWithinHours = Math.max(1, Math.min(720, Number(req.query.activeWithinHours) || 168));
   const activeSince = new Date(Date.now() - activeWithinHours * 60 * 60 * 1000);
@@ -394,6 +448,11 @@ router.get('/users/mobile', async (req: any, res) => {
   }
 
   const users = await AppUserModel().find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+  const total = await AppUserModel().countDocuments(filter);
+  const incompleteSignupCount = await AppUserModel().countDocuments({
+    ...filter,
+    $or: [{ password: { $exists: false } }, { password: null }, { password: '' }],
+  });
   const userIds = users.map((u) => String(u._id));
   const [presenceRows, rideRows, supportCounts] = await Promise.all([
     UserPresenceModel().find({ userId: { $in: userIds } }).lean(),
@@ -423,7 +482,7 @@ router.get('/users/mobile', async (req: any, res) => {
     const openSupportThreads = openSupportMap.get(uid) || 0;
     return sanitizeMobileUser(u, ride, lastSeenAt, openSupportThreads, activeSince);
   });
-  return res.json(ok({ items }));
+  return res.json(ok({ items, total, incompleteSignupCount, limit }));
 });
 
 router.get('/users/mobile/:id', async (req: any, res) => {
@@ -1143,38 +1202,20 @@ router.get('/rides/logs', async (req, res) => {
   const cursor = Number(req.query.cursor ?? 0) || 0;
   const status = req.query.status as RideStatus | undefined;
   const provider = req.query.provider as string | undefined;
-  const q = String(req.query.q ?? '').toLowerCase();
+  const q = String(req.query.q ?? '').trim();
 
   const includeDrafts =
     req.query.includeDrafts === 'true' || req.query.includeDrafts === '1';
   const query: Record<string, unknown> = {};
   if (status) query.status = status;
   if (provider) query.provider = provider;
-  if (q) query.$or = [{ pickup: { $regex: q, $options: 'i' } }, { destination: { $regex: q, $options: 'i' } }];
-  if (!includeDrafts) {
-    const draftGuard = {
-      status: { $ne: 'route_planned' },
-      provider: { $nin: ['Pending', 'Unknown'] },
-    };
-    if (Object.keys(query).length === 0) {
-      Object.assign(query, draftGuard);
-    } else {
-      query.$and = [...(Array.isArray(query.$and) ? query.$and : []), draftGuard];
-    }
+  if (q) {
+    query.$or = [
+      { pickup: { $regex: q, $options: 'i' } },
+      { destination: { $regex: q, $options: 'i' } },
+    ];
   }
-  if (provider) query.provider = provider;
-  if (q) query.$or = [{ pickup: { $regex: q, $options: 'i' } }, { destination: { $regex: q, $options: 'i' } }];
-  if (!includeDrafts) {
-    const draftGuard = {
-      status: { $ne: 'route_planned' },
-      provider: { $nin: ['Pending', 'Unknown'] },
-    };
-    if (Object.keys(query).length === 0) {
-      Object.assign(query, draftGuard);
-    } else {
-      query.$and = [...(Array.isArray(query.$and) ? query.$and : []), draftGuard];
-    }
-  }
+  applyRideLogsGuards(query, includeDrafts);
 
   const items = await RideSnapshotModel().find(query).sort({ createdAt: -1 }).lean();
   const mapped = items.map((item) => ({

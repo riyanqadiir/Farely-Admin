@@ -6,7 +6,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '.
 import { Badge } from '../components/ui/Badge';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
-import { Search, Filter, MapPin, ExternalLink } from 'lucide-react';
+import { Search, MapPin, ExternalLink } from 'lucide-react';
 import { formatDate, formatCurrency, cn } from '../lib/utils';
 import { useState } from 'react';
 import { RideStatus } from '../types/dtos';
@@ -45,11 +45,6 @@ export default function RideLogsPage() {
               Trip routes view
             </Button>
           </Link>
-          <Button variant="outline" size="sm">
-            <Filter className="mr-2 h-4 w-4" />
-            Filters
-          </Button>
-          <Button size="sm">Export CSV</Button>
         </div>
       </div>
 

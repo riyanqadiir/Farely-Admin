@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/mocks';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -150,7 +151,6 @@ export default function DashboardPage() {
           <Button variant="outline" className="glass-card gap-2">
             Last 24 Hours <Clock size={16} />
           </Button>
-          <Button className="shadow-emerald-200/50">Export Report</Button>
         </div>
       </header>
 
@@ -360,10 +360,12 @@ export default function DashboardPage() {
                </div>
             </div>
             
-             <Button variant="outline" className="w-full h-11 border-emerald-100 bg-white/50 group">
-               View Support Inbox 
-               <ArrowUpRight size={16} className="ml-2 opacity-50 group-hover:opacity-100 transition-opacity" />
-             </Button>
+             <Link to="/support/inbox" className="block">
+               <Button variant="outline" className="w-full h-11 border-emerald-100 bg-white/50 group">
+                 View Support Inbox
+                 <ArrowUpRight size={16} className="ml-2 opacity-50 group-hover:opacity-100 transition-opacity" />
+               </Button>
+             </Link>
           </CardContent>
         </Card>
       </div>

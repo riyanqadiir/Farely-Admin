@@ -35,10 +35,12 @@ export default function MobileUsersPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['mobile-users', q],
-    queryFn: () => api.users.listMobile({ q: q.trim() || undefined, limit: 100 }),
+    queryFn: () => api.users.listMobile({ q: q.trim() || undefined, limit: 500 }),
   });
 
   const items = useMemo(() => (data?.success ? data.data.items : []), [data]);
+  const total = data?.success ? data.data.total : 0;
+  const incompleteCount = data?.success ? data.data.incompleteSignupCount : 0;
 
   const { data: detailsData, isLoading: detailsLoading } = useQuery({
     queryKey: ['mobile-user', viewUserId],
@@ -125,7 +127,9 @@ export default function MobileUsersPage() {
         <CardHeader>
           <CardTitle>Users</CardTitle>
           <CardDescription>
-            {items.length} {items.length === 1 ? 'account' : 'accounts'} loaded · search refines results live.
+            Showing {items.length} of {total} {total === 1 ? 'account' : 'accounts'}
+            {incompleteCount > 0 ? ` · ${incompleteCount} incomplete signup${incompleteCount !== 1 ? 's' : ''}` : ''}
+            {q.trim() ? ' (filtered)' : ''}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -171,6 +175,9 @@ export default function MobileUsersPage() {
                   <Badge variant={u.phoneVerified ? 'success' : 'warning'}>
                     {u.phoneVerified ? 'phone ok' : 'phone pending'}
                   </Badge>
+                  {!u.passwordSet && (
+                    <Badge variant="warning">signup incomplete</Badge>
+                  )}
                 </div>
               </div>
 

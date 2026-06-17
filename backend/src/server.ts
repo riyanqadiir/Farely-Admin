@@ -36,9 +36,14 @@ app.use('/ops', reliability);
 const bootstrap = async (): Promise<void> => {
   await connectMongo();
 
-  const seedEmail = (process.env.ADMIN_SEED_EMAIL || 'admin@farely.app').toLowerCase();
-  const seedPassword = process.env.ADMIN_SEED_PASSWORD || 'Admin@12345';
-  const existing = await AdminUserModel().findOne({ email: seedEmail }).lean();
+  const seedEmail = (
+    process.env.ADMIN_SMOKE_EMAIL ||
+    process.env.ADMIN_SEED_EMAIL ||
+    'admin@farely.app'
+  ).toLowerCase();
+  const seedPassword =
+    process.env.ADMIN_SMOKE_PASSWORD || process.env.ADMIN_SEED_PASSWORD || 'Admin@12345';
+  const existing = await AdminUserModel().findOne({ email: seedEmail });
   if (!existing) {
     await AdminUserModel().create({
       email: seedEmail,
@@ -49,6 +54,14 @@ const bootstrap = async (): Promise<void> => {
     });
     // eslint-disable-next-line no-console
     console.log(`Seeded admin user: ${seedEmail}`);
+  } else {
+    // Keep ops login aligned with ADMIN_SMOKE_* / ADMIN_SEED_* in .env (early-stage ops access).
+    existing.passwordHash = await hashPassword(seedPassword);
+    existing.active = true;
+    if (existing.role !== 'super_admin') existing.role = 'super_admin';
+    await existing.save();
+    // eslint-disable-next-line no-console
+    console.log(`Ensured admin login for: ${seedEmail}`);
   }
 
   await runIngestOnce();
